@@ -27,7 +27,7 @@ export default function NotificationsScreen() {
   const { session } = useAuth()
   const [notifs, setNotifs] = useState<Notif[]>([])
 
-  useEffect(() => { fetchNotifs() }, [])
+  useEffect(() => { fetchNotifs() }, [session?.user?.id])
 
   async function fetchNotifs() {
     if (!session) return

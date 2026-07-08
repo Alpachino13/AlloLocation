@@ -47,6 +47,11 @@ function Navigation() {
         tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📊</Text>,
         href: isAgence ? '/dashboard' : null,
       }} />
+      <Tabs.Screen name="favoris" options={{
+        title: 'Favoris',
+        tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🤍</Text>,
+        href: !isAgence ? '/favoris' : null,
+      }} />
       <Tabs.Screen name="profil" options={{
         title: 'Profil',
         tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👤</Text>,
@@ -54,7 +59,6 @@ function Navigation() {
 
       {/* Hidden routes */}
       <Tabs.Screen name="login" options={{ href: null }} />
-      <Tabs.Screen name="favoris" options={{ href: null }} />
       <Tabs.Screen name="voiture/[id]" options={{ href: null }} />
       <Tabs.Screen name="ajouter-voiture" options={{ href: null }} />
       <Tabs.Screen name="notifications" options={{ href: null, headerShown: false }} />

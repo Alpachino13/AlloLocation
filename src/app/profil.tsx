@@ -1,5 +1,7 @@
-import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native'
+import { useEffect, useState } from 'react'
+import { StyleSheet, Text, TouchableOpacity, View, ScrollView, ActivityIndicator } from 'react-native'
 import { useAuth } from '../lib/AuthContext'
+import { supabase } from '../lib/supabase'
 
 const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
 const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'; const GOLD = '#F59E0B'
@@ -11,6 +13,45 @@ export default function Profil() {
   const email = session?.user?.email ?? session?.user?.phone ?? 'Utilisateur'
   const roleLabel = role === 'agence' ? '🏢 Agence vérifiée' : role === 'admin' ? '⚡ Admin' : '✅ Client vérifié'
   const initiale = email[0]?.toUpperCase() ?? 'M'
+
+  const [nom, setNom] = useState<string>('')
+  const [nbReservations, setNbReservations] = useState<number>(0)
+  const [nbFavoris, setNbFavoris] = useState<number>(0)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (session?.user?.id) fetchProfilData()
+  }, [session?.user?.id])
+
+  async function fetchProfilData() {
+    const userId = session!.user.id
+
+    // Nom réel depuis la table profils
+    const { data: profilData } = await supabase
+      .from('profils')
+      .select('nom')
+      .eq('id', userId)
+      .single()
+
+    if (profilData?.nom) setNom(profilData.nom)
+
+    // Nombre réel de réservations du user connecté
+    const { count: resCount } = await supabase
+      .from('reservations')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+
+    setNbReservations(resCount ?? 0)
+
+    // Nombre réel de favoris du user connecté
+    const { count: favCount } = await supabase
+      .from('favoris')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+
+    setNbFavoris(favCount ?? 0)
+    setLoading(false)
+  }
 
   return (
     <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
@@ -29,7 +70,11 @@ export default function Profil() {
             <Text style={s.avatarText}>{initiale}</Text>
           </View>
           <View style={{ paddingTop: 38 }}>
-            <Text style={s.profileName}>Mehdi Merabet</Text>
+            {loading ? (
+              <ActivityIndicator size="small" color={BLUE} style={{ alignSelf: 'flex-start', marginVertical: 8 }} />
+            ) : (
+              <Text style={s.profileName}>{nom || 'Utilisateur'}</Text>
+            )}
             <Text style={s.profileEmail}>{email}</Text>
             <View style={s.roleBadge}>
               <Text style={s.roleBadgeText}>{roleLabel}</Text>
@@ -41,11 +86,11 @@ export default function Profil() {
       {/* Stats */}
       <View style={s.statsRow}>
         <View style={s.statCard}>
-          <Text style={[s.statVal, { color: BLUE }]}>3</Text>
+          <Text style={[s.statVal, { color: BLUE }]}>{loading ? '—' : nbReservations}</Text>
           <Text style={s.statLabel}>Réservations</Text>
         </View>
         <View style={s.statCard}>
-          <Text style={[s.statVal, { color: GOLD }]}>2</Text>
+          <Text style={[s.statVal, { color: GOLD }]}>{loading ? '—' : nbFavoris}</Text>
           <Text style={s.statLabel}>Favoris</Text>
         </View>
       </View>

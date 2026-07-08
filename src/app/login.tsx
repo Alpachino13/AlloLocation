@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 
-const NAVY = '#0A1628'; const NAVY2 = '#131F35'; const CARD = '#1E2D45'
+const NAVY = '#0A1628'; const CARD = '#1E2D45'
 const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'
 const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
 const BORDER = 'rgba(255,255,255,0.08)'; const BORDER2 = 'rgba(255,255,255,0.12)'
@@ -22,18 +22,44 @@ export default function Login() {
   async function handleEmail() {
     if (!email || !password) return Alert.alert('Erreur', 'Remplis tous les champs')
     setLoading(true)
+
     if (!isLogin) {
-      const { data, error } = await supabase.auth.signUp({ email, password })
-      if (error) { Alert.alert('Erreur', error.message); setLoading(false); return }
-      if (data.user) {
-        await supabase.from('profils').insert({ id: data.user.id, role, telephone: '', nom: email.split('@')[0] })
+      // On passe les infos (role, nom) dans les métadonnées de Supabase
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role: role,
+            nom: email.split('@')[0],
+            telephone: ''
+          }
+        }
+      })
+
+      if (error) {
+        Alert.alert('Erreur', error.message)
+        setLoading(false)
+        return
+      }
+
+      // Le trigger SQL s'est occupé de créer le profil.
+      // Si une session est directement renvoyée (pas de confirmation email exigée)
+      if (data.session) {
         await refreshRole()
         router.replace('/' as any)
-      } else Alert.alert('✅ Compte créé', 'Vérifie ton email pour confirmer')
+      } else {
+        Alert.alert('✅ Compte créé', 'Vérifie ton email pour confirmer ou connecte-toi')
+        setIsLogin(true) // On bascule sur l'écran de connexion par confort
+      }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) Alert.alert('Erreur', error.message)
-      else router.replace('/' as any)
+      if (error) {
+        Alert.alert('Erreur', error.message)
+      } else {
+        await refreshRole()
+        router.replace('/' as any)
+      }
     }
     setLoading(false)
   }

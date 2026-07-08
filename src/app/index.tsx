@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import {
-  ActivityIndicator, ScrollView, StyleSheet, Text,
+  ActivityIndicator, Image, ScrollView, StyleSheet, Text,
   TextInput, TouchableOpacity, View
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 
-const NAVY = '#0A1628'; const NAVY2 = '#131F35'; const CARD = '#1E2D45'; const CARD2 = '#243352'
+const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
 const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'; const GOLD = '#F59E0B'
 const RED = '#EF4444'
 const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
@@ -17,7 +17,8 @@ type Voiture = {
   id: string; nom: string; agence: string
   prix: number; note: number; carburant: string
   boite: string; places: number; km_jour: number
-  wilaya: string; statut: string
+  wilaya: string; statut: string; categorie: string
+  image_url: string | null
 }
 
 const CATS = ['Tous', 'Économique', 'SUV / 4x4', 'Luxe', 'Camion']
@@ -30,11 +31,21 @@ export default function HomeScreen() {
   const [activeCat, setActiveCat] = useState('Tous')
   const [search, setSearch] = useState('')
   const [nonLues, setNonLues] = useState(0)
+  const [nomUtilisateur, setNomUtilisateur] = useState('')
+  const [favoriIds, setFavoriIds] = useState<Set<string>>(new Set())
 
   useEffect(() => { fetchVoitures() }, [])
 
   useEffect(() => {
-    if (!session) return
+    if (!session?.user?.id) return
+
+    // Nom réel de l'utilisateur connecté
+    supabase.from('profils').select('nom').eq('id', session.user.id).single()
+      .then(({ data }) => { if (data?.nom) setNomUtilisateur(data.nom) })
+
+    // Favoris déjà enregistrés par l'utilisateur (pour l'état du cœur)
+    supabase.from('favoris').select('voiture_id').eq('user_id', session.user.id)
+      .then(({ data }) => { if (data) setFavoriIds(new Set(data.map((f: any) => f.voiture_id))) })
 
     // Compter notifs non lues
     supabase.from('notifications')
@@ -53,7 +64,7 @@ export default function HomeScreen() {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [session])
+  }, [session?.user?.id])
 
   async function fetchVoitures() {
     setLoading(true)
@@ -62,11 +73,42 @@ export default function HomeScreen() {
     setLoading(false)
   }
 
+  async function toggleFavori(voitureId: string) {
+    if (!session?.user?.id) {
+      router.push('/login' as any)
+      return
+    }
+    const dejaFavori = favoriIds.has(voitureId)
+
+    // Mise à jour optimiste de l'UI
+    setFavoriIds(prev => {
+      const next = new Set(prev)
+      dejaFavori ? next.delete(voitureId) : next.add(voitureId)
+      return next
+    })
+
+    if (dejaFavori) {
+      const { error } = await supabase.from('favoris')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('voiture_id', voitureId)
+      if (error) setFavoriIds(prev => new Set(prev).add(voitureId)) // rollback
+    } else {
+      const { error } = await supabase.from('favoris')
+        .insert({ user_id: session.user.id, voiture_id: voitureId })
+      if (error) setFavoriIds(prev => { const next = new Set(prev); next.delete(voitureId); return next }) // rollback
+    }
+  }
+
   const getEmoji = (nom: string) => {
     if (nom.includes('Hilux') || nom.includes('4x4')) return '🛻'
     if (nom.includes('Tucson') || nom.includes('SUV')) return '🚘'
     return '🚗'
   }
+
+  const voituresFiltrees = voitures
+    .filter(v => activeCat === 'Tous' || v.categorie === activeCat)
+    .filter(v => search === '' || v.nom.toLowerCase().includes(search.toLowerCase()) || v.wilaya.toLowerCase().includes(search.toLowerCase()))
 
   return (
     <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
@@ -80,7 +122,7 @@ export default function HomeScreen() {
       <View style={s.header}>
         <View>
           <Text style={s.headerSub}>Bonjour 👋</Text>
-          <Text style={s.headerName}>Mehdi</Text>
+          <Text style={s.headerName}>{nomUtilisateur || 'Voyageur'}</Text>
         </View>
         <TouchableOpacity
           style={s.notifBtn}
@@ -141,10 +183,12 @@ export default function HomeScreen() {
       {/* Car list */}
       {loading ? (
         <ActivityIndicator size="large" color={BLUE} style={{ marginTop: 40 }} />
+      ) : voituresFiltrees.length === 0 ? (
+        <View style={{ alignItems: 'center', paddingTop: 40, paddingHorizontal: 30 }}>
+          <Text style={{ color: TEXT2, fontSize: 14, textAlign: 'center' }}>Aucune voiture ne correspond à cette recherche.</Text>
+        </View>
       ) : (
-        voitures
-          .filter(v => search === '' || v.nom.toLowerCase().includes(search.toLowerCase()) || v.wilaya.toLowerCase().includes(search.toLowerCase()))
-          .map(v => (
+        voituresFiltrees.map(v => (
             <TouchableOpacity
               key={v.id}
               style={s.carCard}
@@ -152,14 +196,18 @@ export default function HomeScreen() {
               onPress={() => router.push(`/voiture/${v.id}` as any)}
             >
               <View style={s.carImgBox}>
-                <Text style={s.carEmoji}>{getEmoji(v.nom)}</Text>
+                {v.image_url ? (
+                  <Image source={{ uri: v.image_url }} style={s.carImg} resizeMode="cover" />
+                ) : (
+                  <Text style={s.carEmoji}>🚗</Text>
+                )}
                 <View style={[s.carBadge, v.statut === 'loue' ? s.badgeLoue : s.badgeDispo]}>
                   <Text style={[s.carBadgeText, { color: v.statut === 'loue' ? '#FCA5A5' : '#34D399' }]}>
                     {v.statut === 'loue' ? 'Loué' : 'Disponible'}
                   </Text>
                 </View>
-                <TouchableOpacity style={s.heartBtn}>
-                  <Text style={{ fontSize: 15 }}>🤍</Text>
+                <TouchableOpacity style={s.heartBtn} onPress={() => toggleFavori(v.id)}>
+                  <Text style={{ fontSize: 15 }}>{favoriIds.has(v.id) ? '❤️' : '🤍'}</Text>
                 </TouchableOpacity>
               </View>
               <View style={s.carInfo}>
@@ -213,6 +261,7 @@ const s = StyleSheet.create({
   sectionLink: { fontSize: 13, fontWeight: '500', color: BLUE_L },
   carCard: { marginHorizontal: 20, marginBottom: 14, backgroundColor: CARD, borderRadius: 16, overflow: 'hidden', borderWidth: 0.5, borderColor: BORDER2 },
   carImgBox: { height: 160, backgroundColor: CARD2, justifyContent: 'center', alignItems: 'center', position: 'relative' },
+  carImg: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 },
   carEmoji: { fontSize: 64 },
   carBadge: { position: 'absolute', top: 10, right: 10, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
   badgeDispo: { backgroundColor: 'rgba(16,185,129,0.2)', borderWidth: 0.5, borderColor: 'rgba(52,211,153,0.3)' },

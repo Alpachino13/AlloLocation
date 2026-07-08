@@ -1,27 +1,35 @@
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../lib/AuthContext'
 
 const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
 const BLUE = '#2563EB'; const GOLD = '#F59E0B'; const GREEN = '#10B981'; const RED = '#EF4444'
 const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
 const BORDER = 'rgba(255,255,255,0.08)'; const BORDER2 = 'rgba(255,255,255,0.12)'
 
-const EMOJIS: Record<string, string> = { 'Logan': '🚙', 'Hilux': '🛻', 'Tucson': '🚘', 'Clio': '🚗', 'Peugeot': '🚗' }
-const getEmoji = (nom: string) => { for (const [k, v] of Object.entries(EMOJIS)) if (nom?.includes(k)) return v; return '🚗' }
-
 export default function Reservations() {
   const router = useRouter()
+  const { session } = useAuth()
   const [reservations, setReservations] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.from('reservations').select('id,statut,date_debut,date_fin,montant,voitures(nom)').order('created_at', { ascending: false }).then(({ data }) => {
-      if (data) setReservations(data)
+    if (!session) {
       setLoading(false)
+      return
+    }
+
+    supabase.from('reservations')
+      .select('id,statut,date_debut,date_fin,montant,voitures(nom,image_url)')
+      .eq('user_id', session.user.id)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (data) setReservations(data)
+        setLoading(false)
     })
-  }, [])
+  }, [session])
 
   const statutStyle: Record<string, { bg: string; color: string; border: string; label: string }> = {
     confirmee: { bg: 'rgba(16,185,129,0.15)', color: '#34D399', border: 'rgba(16,185,129,0.3)', label: '✓ Confirmée' },
@@ -53,10 +61,15 @@ export default function Reservations() {
         reservations.map(res => {
           const st = statutStyle[res.statut] ?? statutStyle['en_attente']
           const nom = (res.voitures as any)?.nom ?? '—'
+          const imgUrl = (res.voitures as any)?.image_url ?? null
           return (
             <TouchableOpacity key={res.id} style={s.resvCard} activeOpacity={0.85}>
               <View style={s.resvEmoji}>
-                <Text style={{ fontSize: 28 }}>{getEmoji(nom)}</Text>
+                {imgUrl ? (
+                  <Image source={{ uri: imgUrl }} style={s.resvImg} resizeMode="cover" />
+                ) : (
+                  <Text style={{ fontSize: 28 }}>🚗</Text>
+                )}
               </View>
               <View style={s.resvInfo}>
                 <Text style={s.resvName}>{nom}</Text>
@@ -71,7 +84,6 @@ export default function Reservations() {
         })
       )}
 
-      {/* Find a car CTA */}
       <View style={s.ctaCard}>
         <Text style={s.ctaIcon}>🔍</Text>
         <Text style={s.ctaTitle}>Trouver une voiture</Text>
@@ -92,7 +104,8 @@ const s = StyleSheet.create({
   time: { fontSize: 15, fontWeight: '700', color: TEXT },
   pageTitle: { fontSize: 24, fontWeight: '800', color: TEXT, paddingHorizontal: 20, paddingBottom: 16 },
   resvCard: { marginHorizontal: 20, marginBottom: 10, backgroundColor: CARD, borderRadius: 14, padding: 14, borderWidth: 0.5, borderColor: BORDER2, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  resvEmoji: { width: 52, height: 52, backgroundColor: CARD2, borderRadius: 12, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  resvEmoji: { width: 52, height: 52, backgroundColor: CARD2, borderRadius: 12, justifyContent: 'center', alignItems: 'center', flexShrink: 0, overflow: 'hidden' },
+  resvImg: { width: '100%', height: '100%' },
   resvInfo: { flex: 1 },
   resvName: { fontSize: 14, fontWeight: '700', color: TEXT, marginBottom: 3 },
   resvDates: { fontSize: 12, color: TEXT2, marginBottom: 6 },
