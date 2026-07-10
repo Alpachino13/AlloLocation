@@ -6,7 +6,7 @@ import {
 import { useFocusEffect, useRouter } from 'expo-router'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
-import { Ionicons } from '@expo/vector-icons' // ✨ Ajout des icônes vectorielles
+import { Ionicons } from '@expo/vector-icons'
 
 const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
 const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'; const GOLD = '#F59E0B'

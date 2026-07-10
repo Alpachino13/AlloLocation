@@ -1,8 +1,8 @@
+import { useRouter } from 'expo-router'
 import { useState } from 'react'
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
-import { useRouter } from 'expo-router'
-import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
+import { supabase } from '../lib/supabase'
 
 const NAVY = '#0A1628'; const CARD = '#1E2D45'
 const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'
@@ -19,20 +19,38 @@ export default function Login() {
   const [showPwd, setShowPwd] = useState(false)
   const { refreshRole } = useAuth()
 
+  // Nouveaux états pour le formulaire Agence
+  const [nomAgence, setNomAgence] = useState('')
+  const [telephone, setTelephone] = useState('')
+  const [numRC, setNumRC] = useState('')
+  const [wilaya, setWilaya] = useState('')
+  const [adresse, setAdresse] = useState('')
+
   async function handleEmail() {
-    if (!email || !password) return Alert.alert('Erreur', 'Remplis tous les champs')
+    if (!email || !password) return Alert.alert('Erreur', 'Remplis tous les champs principaux')
+    
+    // Validation stricte si c'est une agence qui s'inscrit
+    if (!isLogin && role === 'agence') {
+      if (!nomAgence || !telephone || !numRC || !wilaya || !adresse) {
+        return Alert.alert('Erreur', 'Remplis toutes les informations de l’agence')
+      }
+    }
+
     setLoading(true)
 
     if (!isLogin) {
-      // On passe les infos (role, nom) dans les métadonnées de Supabase
+      // On passe TOUTES les infos dans les métadonnées de Supabase Auth
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             role: role,
-            nom: email.split('@')[0],
-            telephone: ''
+            nom: role === 'agence' ? nomAgence : email.split('@')[0],
+            telephone: telephone,
+            num_rc: role === 'agence' ? numRC : '',
+            wilaya: role === 'agence' ? wilaya : '',
+            adresse: role === 'agence' ? adresse : ''
           }
         }
       })
@@ -43,14 +61,12 @@ export default function Login() {
         return
       }
 
-      // Le trigger SQL s'est occupé de créer le profil.
-      // Si une session est directement renvoyée (pas de confirmation email exigée)
       if (data.session) {
         await refreshRole()
         router.replace('/' as any)
       } else {
         Alert.alert('✅ Compte créé', 'Vérifie ton email pour confirmer ou connecte-toi')
-        setIsLogin(true) // On bascule sur l'écran de connexion par confort
+        setIsLogin(true)
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -131,11 +147,53 @@ export default function Login() {
                   </TouchableOpacity>
                 ))}
               </View>
+
+              {/* CHAMPS DYNAMIQUES POUR L'AGENCE */}
+              {role === 'agence' && (
+                <View style={s.agenceFormAnimation}>
+                  <Text style={s.sectionDivider}>INFORMATIONS DE L'AGENCE</Text>
+
+                  <Text style={s.fieldLabel}>Nom de l'agence</Text>
+                  <View style={s.field}>
+                    <Text style={{ fontSize: 18, color: TEXT3 }}>🏷️</Text>
+                    <TextInput style={s.fieldInput} placeholder="ex: Luxury Rides" placeholderTextColor={TEXT3}
+                      value={nomAgence} onChangeText={setNomAgence} autoCapitalize="words" />
+                  </View>
+
+                  <Text style={s.fieldLabel}>Numéro de Téléphone Pro</Text>
+                  <View style={s.field}>
+                    <Text style={{ fontSize: 18, color: TEXT3 }}>📞</Text>
+                    <TextInput style={s.fieldInput} placeholder="ex: 0550XXXXXX" placeholderTextColor={TEXT3}
+                      value={telephone} onChangeText={setTelephone} keyboardType="phone-pad" />
+                  </View>
+
+                  <Text style={s.fieldLabel}>N° Registre du Commerce (RC)</Text>
+                  <View style={s.field}>
+                    <Text style={{ fontSize: 18, color: TEXT3 }}>📝</Text>
+                    <TextInput style={s.fieldInput} placeholder="ex: 23/00-XXXXXXX" placeholderTextColor={TEXT3}
+                      value={numRC} onChangeText={setNumRC} />
+                  </View>
+
+                  <Text style={s.fieldLabel}>Wilaya</Text>
+                  <View style={s.field}>
+                    <Text style={{ fontSize: 18, color: TEXT3 }}>🏙️</Text>
+                    <TextInput style={s.fieldInput} placeholder="ex: Tlemcen, Alger..." placeholderTextColor={TEXT3}
+                      value={wilaya} onChangeText={setWilaya} autoCapitalize="words" />
+                  </View>
+
+                  <Text style={s.fieldLabel}>Adresse du Bureau</Text>
+                  <View style={s.field}>
+                    <Text style={{ fontSize: 18, color: TEXT3 }}>📍</Text>
+                    <TextInput style={s.fieldInput} placeholder="Adresse complète" placeholderTextColor={TEXT3}
+                      value={adresse} onChangeText={setAdresse} autoCapitalize="words" />
+                  </View>
+                </View>
+              )}
             </>
           )}
 
           <TouchableOpacity style={[s.btnPrimary, loading && { opacity: 0.6 }]} onPress={handleEmail} disabled={loading}>
-            <Text style={s.btnPrimaryText}>{loading ? 'Chargement...' : isLogin ? 'Se connecter' : 'Créer mon compte'}</Text>
+            <Text style={s.btnPrimaryText}>{loading ? 'Chargement...' : isLogin ? 'Se connecter' : 'Créer mon compte Agence'}</Text>
           </TouchableOpacity>
 
           <View style={s.divider}>
@@ -184,4 +242,7 @@ const s = StyleSheet.create({
   dividerText: { fontSize: 12, color: TEXT3 },
   btnOutline: { backgroundColor: 'transparent', borderWidth: 0.5, borderColor: BORDER2, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   btnOutlineText: { color: TEXT, fontSize: 15, fontWeight: '600' },
+  // Nouveaux styles pour la démarcation de la section Agence
+  sectionDivider: { fontSize: 11, fontWeight: '700', color: BLUE_L, letterSpacing: 1, marginTop: 10, marginBottom: 16, textAlign: 'center' },
+  agenceFormAnimation: { marginTop: 4 }
 })
