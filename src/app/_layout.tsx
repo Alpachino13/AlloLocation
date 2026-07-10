@@ -37,11 +37,6 @@ function Navigation() {
         title: 'Explorer',
         tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🏠</Text>,
       }} />
-      <Tabs.Screen name="reservations" options={{
-        title: 'Réservations',
-        tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📅</Text>,
-        href: !isAgence ? '/reservations' : null,
-      }} />
       <Tabs.Screen name="dashboard" options={{
         title: 'Dashboard',
         tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📊</Text>,
@@ -62,6 +57,8 @@ function Navigation() {
       <Tabs.Screen name="voiture/[id]" options={{ href: null }} />
       <Tabs.Screen name="ajouter-voiture" options={{ href: null }} />
       <Tabs.Screen name="notifications" options={{ href: null, headerShown: false }} />
+      <Tabs.Screen name="reservations" options={{ href: null }} />
+      <Tabs.Screen name="reservation" options={{ href: null }} />
     </Tabs>
   )
 }
