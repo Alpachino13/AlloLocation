@@ -5,7 +5,6 @@ import {
   StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
 
@@ -59,9 +58,8 @@ export default function AjouterVoiture() {
       return
     }
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true, aspect: [16, 9], quality: 0.8,
-      videoMaxDuration: 60,
     })
     if (!result.canceled) await traiterPhoto(result.assets[0].uri)
   }
@@ -74,14 +72,13 @@ export default function AjouterVoiture() {
       return
     }
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true, aspect: [16, 9], quality: 0.8,
     })
     if (!result.canceled) await traiterPhoto(result.assets[0].uri)
   }
 
   async function traiterPhoto(uri: string) {
-    // Reset état précédent
     setPhotoUri(uri)
     setImageUrl(null)
     setUploadErreur(null)
@@ -90,30 +87,19 @@ export default function AjouterVoiture() {
     try {
       if (!session?.user?.id) throw new Error('Non connecté')
 
-      // Lire le fichier en base64
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      })
+      // ✅ NOUVEAU : Utiliser fetch + blob (compatible Expo SDK 54+)
+      const response = await fetch(uri)
+      const blob = await response.blob()
 
       // Déterminer le type MIME
       const ext = uri.split('.').pop()?.split('?')[0]?.toLowerCase() ?? 'jpg'
-      const isVideo = ['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)
-      const mimeType = isVideo
-        ? (ext === 'mov' ? 'video/quicktime' : ext === 'webm' ? 'video/webm' : 'video/mp4')
-        : (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg')
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
       const fileName = `${session.user.id}/${Date.now()}.${ext}`
 
-      // Convertir base64 → Uint8Array
-      const binaryStr = atob(base64)
-      const bytes = new Uint8Array(binaryStr.length)
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i)
-      }
-
-      // Upload dans Supabase Storage
+      // Upload direct du blob dans Supabase Storage
       const { error: uploadError } = await supabase.storage
         .from('voitures')
-        .upload(fileName, bytes, { contentType: mimeType, upsert: true })
+        .upload(fileName, blob, { contentType: mimeType, upsert: true })
 
       if (uploadError) throw new Error(uploadError.message)
 
@@ -151,7 +137,6 @@ export default function AjouterVoiture() {
     if (!prix.trim() || isNaN(parseInt(prix))) return showAlert('Erreur', 'Le prix est obligatoire')
     if (uploading) return showAlert('Patientez', "L'upload de la photo est en cours...")
     if (photoUri && !imageUrl) {
-      // La photo a été choisie mais l'upload a échoué
       return showAlert('Erreur', "La photo n'a pas pu être uploadée. Réessayez ou supprimez la photo.")
     }
 
@@ -177,7 +162,6 @@ export default function AjouterVoiture() {
     else showAlert('✅ Succès', 'Voiture publiée avec succès !', () => router.back())
   }
 
-  // Affiche l'URL Supabase en priorité (stable), sinon l'aperçu local
   const photoAffichee = imageUrl ?? photoUri
 
   return (
@@ -197,12 +181,9 @@ export default function AjouterVoiture() {
 
         <View style={s.body}>
 
-          {/* ── ZONE PHOTO ── */}
           {photoAffichee ? (
             <View style={s.previewWrap}>
               <Image source={{ uri: photoAffichee }} style={s.previewImg} resizeMode="cover" />
-
-              {/* Badge statut */}
               <View style={s.previewOverlay}>
                 {uploading ? (
                   <View style={s.uploadingBadge}>
@@ -220,7 +201,6 @@ export default function AjouterVoiture() {
                 ) : null}
               </View>
 
-              {/* Bouton retry si erreur */}
               {uploadErreur && !uploading && (
                 <TouchableOpacity
                   style={s.retryBtn}
@@ -230,7 +210,6 @@ export default function AjouterVoiture() {
                 </TouchableOpacity>
               )}
 
-              {/* Actions bas */}
               <View style={s.previewActions}>
                 <TouchableOpacity style={s.previewBtn} onPress={() => setShowPhotoModal(true)} disabled={uploading}>
                   <Text style={s.previewBtnIcon}>✏️</Text>
@@ -263,7 +242,6 @@ export default function AjouterVoiture() {
             </TouchableOpacity>
           )}
 
-          {/* INFORMATIONS */}
           <Text style={s.sectionLabel}>INFORMATIONS</Text>
           <Text style={s.fieldLabel}>Nom du véhicule</Text>
           <View style={s.field}>
@@ -356,7 +334,6 @@ export default function AjouterVoiture() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      {/* MODAL CHOIX PHOTO */}
       <Modal visible={showPhotoModal} transparent animationType="slide" onRequestClose={() => setShowPhotoModal(false)}>
         <TouchableOpacity style={s.modalBackdrop} activeOpacity={1} onPress={() => setShowPhotoModal(false)} />
         <View style={s.modalSheet}>
