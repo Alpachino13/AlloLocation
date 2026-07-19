@@ -28,6 +28,7 @@ const DAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
 
 type Reservation = {
   id: string
+  voiture_id: string
   statut: string
   date_debut: string
   date_fin: string
@@ -121,7 +122,7 @@ export default function Dashboard() {
     if (!session) return
     const { data } = await supabase
       .from('reservations')
-      .select('id,statut,date_debut,date_fin,montant,voitures!inner(nom,agence_id,image_url)')
+      .select('id,voiture_id,statut,date_debut,date_fin,montant,voitures!inner(nom,agence_id,image_url)')
       .eq('voitures.agence_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -140,9 +141,22 @@ export default function Dashboard() {
   }
 
   async function changerStatut(id: string, statut: string) {
+    // 1. Mettre à jour la réservation
     const { error } = await supabase.from('reservations').update({ statut }).eq('id', id)
     if (error) { Alert.alert('Erreur', error.message); return }
+
+    // 2. Mettre à jour le statut de la voiture en conséquence
+    const reservation = reservations.find(r => r.id === id)
+    if (reservation?.voiture_id) {
+      const statutVoiture = statut === 'confirmee' ? 'loue' : 'disponible'
+      await supabase
+        .from('voitures')
+        .update({ statut: statutVoiture })
+        .eq('id', reservation.voiture_id)
+    }
+
     fetchReservations()
+    fetchVoitures()
   }
 
   const taux = totalVoitures > 0 ? Math.round(((totalVoitures - disponibles) / totalVoitures) * 100) : 0
@@ -237,7 +251,6 @@ export default function Dashboard() {
               <Text style={s.gaugeLabel}>Total</Text>
             </View>
           </View>
-          {/* Progress bar */}
           <View style={s.progressTrack}>
             <View style={[s.progressFill, { width: `${taux}%` as any }]} />
           </View>
@@ -275,26 +288,19 @@ export default function Dashboard() {
             ))
             return (
               <View key={res.id} style={s.pendingCard}>
-                {/* Car thumbnail */}
                 <View style={s.pendingThumb}>
                   {imgUrl ? (
-                    <Image
-                      source={{ uri: imgUrl }}
-                      style={s.pendingImg}
-                      resizeMode="cover"
-                    />
+                    <Image source={{ uri: imgUrl }} style={s.pendingImg} resizeMode="cover" />
                   ) : (
                     <View style={s.pendingImgFallback}>
                       <Text style={{ fontSize: 26 }}>🚗</Text>
                     </View>
                   )}
-                  {/* Status pill on image */}
                   <View style={s.pendingPill}>
                     <Text style={s.pendingPillText}>En attente</Text>
                   </View>
                 </View>
 
-                {/* Info */}
                 <View style={s.pendingBody}>
                   <View style={s.pendingRow}>
                     <Text style={s.pendingCarName} numberOfLines={1}>{nom}</Text>
@@ -302,7 +308,6 @@ export default function Dashboard() {
                   </View>
                   <Text style={s.pendingDates}>📅 {debut} → {fin} · {duree}j</Text>
 
-                  {/* Action buttons */}
                   <View style={s.pendingActions}>
                     <TouchableOpacity
                       style={s.btnRefuse}
@@ -381,7 +386,6 @@ const s = StyleSheet.create({
   },
   time: { fontSize: 15, fontWeight: '700', color: TEXT },
 
-  // ── Header
   header: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', paddingHorizontal: 20, paddingBottom: 20,
@@ -396,7 +400,6 @@ const s = StyleSheet.create({
   addBtnIcon: { color: '#fff', fontSize: 16, lineHeight: 18 },
   addBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  // ── KPI strip
   kpiStrip: { paddingHorizontal: 20, gap: 10, paddingBottom: 4 },
   kpiCard: {
     width: 140, backgroundColor: CARD, borderRadius: 16,
@@ -407,7 +410,6 @@ const s = StyleSheet.create({
   kpiLabel: { fontSize: 11, color: TEXT2, fontWeight: '500' },
   kpiSub: { fontSize: 10, color: TEXT3, marginTop: 4 },
 
-  // ── Section wrapper
   section: { paddingHorizontal: 20, marginTop: 28 },
   sectionTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: TEXT },
@@ -415,7 +417,6 @@ const s = StyleSheet.create({
   legendDot: { width: 7, height: 7, borderRadius: 4 },
   legendLabel: { fontSize: 10, color: TEXT3 },
 
-  // ── Chart
   chartWrap: {
     flexDirection: 'row', alignItems: 'flex-end',
     backgroundColor: CARD, borderRadius: 16,
@@ -430,7 +431,6 @@ const s = StyleSheet.create({
   barGlow: { shadowColor: GOLD, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 },
   barLabel: { fontSize: 10, color: TEXT3, fontWeight: '500' },
 
-  // ── Gauge / Occupation
   gaugeCard: {
     backgroundColor: CARD, borderRadius: 16, padding: 20,
     borderWidth: 0.5, borderColor: BORDER2,
@@ -445,7 +445,6 @@ const s = StyleSheet.create({
   progressLabels: { flexDirection: 'row', justifyContent: 'space-between' },
   progressPct: { fontSize: 11, color: TEXT3 },
 
-  // ── Pending badge
   badge: {
     backgroundColor: 'rgba(245,158,11,0.2)', borderRadius: 20,
     paddingHorizontal: 10, paddingVertical: 3,
@@ -453,7 +452,6 @@ const s = StyleSheet.create({
   },
   badgeText: { color: GOLD_L, fontSize: 12, fontWeight: '700' },
 
-  // ── Pending card
   pendingCard: {
     backgroundColor: CARD, borderRadius: 16,
     borderWidth: 0.5, borderColor: BORDER2,
@@ -488,7 +486,6 @@ const s = StyleSheet.create({
   },
   btnConfirmText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  // ── Confirmed rows
   confirmedRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: CARD, borderRadius: 14, padding: 12,
@@ -509,7 +506,6 @@ const s = StyleSheet.create({
   confirmedBadgeText: { fontSize: 10, color: GREEN_L, fontWeight: '600' },
   confirmedAmount: { fontSize: 13, fontWeight: '800', color: GOLD, minWidth: 70, textAlign: 'right' },
 
-  // ── Empty state
   emptyState: {
     backgroundColor: CARD, borderRadius: 16, padding: 30,
     borderWidth: 0.5, borderColor: BORDER2,
