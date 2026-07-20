@@ -1,32 +1,64 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator, Image, RefreshControl, ScrollView,
-  StyleSheet, Text, TextInput, TouchableOpacity, View
+  StyleSheet, Text, TextInput, TouchableOpacity, View, Dimensions, FlatList
 } from 'react-native'
 import { useFocusEffect, useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
-import { Ionicons } from '@expo/vector-icons'
+import { COLORS, CATEGORIES, formatDA } from '../constants'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
-const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'; const GOLD = '#F59E0B'
-const RED = '#EF4444'
-const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
-const BORDER2 = 'rgba(255,255,255,0.12)'
+const { width: SW } = Dimensions.get('window')
 
 type Voiture = {
-  id: string; nom: string; agence: string
+  id: string; nom: string; agence: string; agence_id: string
   prix: number; note: number; carburant: string
   boite: string; places: number; km_jour: number
   wilaya: string; statut: string; categorie: string
-  image_url: string | null
+  image_url: string | null; annee?: number | null
 }
 
-const CATS = ['Tous', 'Économique', 'SUV / 4x4', 'Luxe', 'Camion']
+/* ─── Skeleton Card ─── */
+function SkeletonCard() {
+  return (
+    <View style={styles.carCard}>
+      <View style={[styles.carImgBox, { backgroundColor: COLORS.card2 }]}>
+        <ActivityIndicator color={COLORS.text3} />
+      </View>
+      <View style={styles.carInfo}>
+        <View style={{ height: 16, width: '60%', backgroundColor: COLORS.card2, borderRadius: 4, marginBottom: 8 }} />
+        <View style={{ height: 12, width: '40%', backgroundColor: COLORS.card2, borderRadius: 4, marginBottom: 12 }} />
+        <View style={{ height: 12, width: '80%', backgroundColor: COLORS.card2, borderRadius: 4 }} />
+      </View>
+    </View>
+  )
+}
+
+/* ─── Empty State ─── */
+function EmptyState({ icon, title, subtitle, action }: {
+  icon: string; title: string; subtitle: string; action?: { label: string; onPress: () => void }
+}) {
+  return (
+    <View style={styles.emptyBox}>
+      <Text style={{ fontSize: 48, marginBottom: 12 }}>{icon}</Text>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptySub}>{subtitle}</Text>
+      {action && (
+        <TouchableOpacity style={styles.emptyBtn} onPress={action.onPress}>
+          <Text style={styles.emptyBtnText}>{action.label}</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  )
+}
 
 export default function HomeScreen() {
   const router = useRouter()
   const { session } = useAuth()
+  const insets = useSafeAreaInsets()
+
   const [voitures, setVoitures] = useState<Voiture[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -35,8 +67,10 @@ export default function HomeScreen() {
   const [nonLues, setNonLues] = useState(0)
   const [nomUtilisateur, setNomUtilisateur] = useState('')
   const [favoriIds, setFavoriIds] = useState<Set<string>>(new Set())
+  const [imageErrors, setImageErrors] = useState<Set<string>>(new Set())
 
-  // ✅ Recharge les voitures à chaque fois que l'écran devient actif
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useFocusEffect(
     useCallback(() => {
       fetchVoitures()
@@ -71,15 +105,14 @@ export default function HomeScreen() {
 
   async function fetchVoitures() {
     setLoading(true)
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('voitures')
       .select('*')
       .order('created_at', { ascending: false })
-    if (data) setVoitures(data)
+    if (!error && data) setVoitures(data)
     setLoading(false)
   }
 
-  // ✅ Pull-to-refresh
   async function onRefresh() {
     setRefreshing(true)
     await fetchVoitures()
@@ -88,7 +121,7 @@ export default function HomeScreen() {
 
   async function toggleFavori(voitureId: string) {
     if (!session?.user?.id) {
-      router.push('/login' as any)
+      router.push('/login')
       return
     }
     const dejaFavori = favoriIds.has(voitureId)
@@ -101,214 +134,267 @@ export default function HomeScreen() {
 
     if (dejaFavori) {
       const { error } = await supabase.from('favoris')
-        .delete()
-        .eq('user_id', session.user.id)
-        .eq('voiture_id', voitureId)
-      if (error) setFavoriIds(prev => new Set(prev).add(voitureId))
+        .delete().eq('user_id', session.user.id).eq('voiture_id', voitureId)
+      if (error) {
+        setFavoriIds(prev => new Set(prev).add(voitureId))
+      }
     } else {
       const { error } = await supabase.from('favoris')
         .insert({ user_id: session.user.id, voiture_id: voitureId })
-      if (error) setFavoriIds(prev => { const next = new Set(prev); next.delete(voitureId); return next })
+      if (error) {
+        setFavoriIds(prev => { const n = new Set(prev); n.delete(voitureId); return n })
+      }
     }
   }
 
-  const voituresFiltrees = voitures
-    .filter(v => activeCat === 'Tous' || v.categorie === activeCat)
-    .filter(v =>
-      search === '' ||
-      v.nom.toLowerCase().includes(search.toLowerCase()) ||
-      v.wilaya.toLowerCase().includes(search.toLowerCase())
+  const voituresFiltrees = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    return voitures
+      .filter(v => activeCat === 'Tous' || v.categorie === activeCat)
+      .filter(v =>
+        !term ||
+        v.nom.toLowerCase().includes(term) ||
+        v.wilaya.toLowerCase().includes(term) ||
+        v.agence.toLowerCase().includes(term) ||
+        v.carburant.toLowerCase().includes(term)
+      )
+  }, [voitures, activeCat, search])
+
+  const handleSearch = (text: string) => {
+    setSearch(text)
+    if (searchDebounce.current) clearTimeout(searchDebounce.current)
+    searchDebounce.current = setTimeout(() => {
+      // Analytics ou log ici
+    }, 500)
+  }
+
+  const renderCarCard = ({ item: v }: { item: Voiture }) => {
+    const imgError = imageErrors.has(v.id)
+    const dispo = v.statut === 'disponible'
+
+    return (
+      <TouchableOpacity
+        style={styles.carCard}
+        activeOpacity={0.88}
+        onPress={() => router.push(`/voiture/${v.id}`)}
+      >
+        <View style={styles.carImgBox}>
+          {v.image_url && !imgError ? (
+            <Image
+              source={{ uri: v.image_url }}
+              style={styles.carImg}
+              resizeMode="cover"
+              onError={() => setImageErrors(prev => new Set(prev).add(v.id))}
+            />
+          ) : (
+            <View style={[styles.carImg, { backgroundColor: COLORS.card2, justifyContent: 'center', alignItems: 'center' }]}>
+              <Ionicons name="car-sport" size={48} color={COLORS.text3} />
+            </View>
+          )}
+
+          <View style={[styles.carBadge, dispo ? styles.badgeDispo : styles.badgeLoue]}>
+            <Text style={[styles.carBadgeText, { color: dispo ? COLORS.greenLight : COLORS.redLight }]}>
+              {dispo ? 'Disponible' : 'Loué'}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.heartBtn}
+            onPress={() => toggleFavori(v.id)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons
+              name={favoriIds.has(v.id) ? "heart" : "heart-outline"}
+              size={20}
+              color={favoriIds.has(v.id) ? COLORS.red : COLORS.text}
+            />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.carInfo}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={styles.carName} numberOfLines={1}>{v.nom}</Text>
+              <Text style={styles.carAgency}>🏢 {v.agence} · {v.wilaya}</Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={styles.carPrice}>{formatDA(v.prix)}</Text>
+              <Text style={styles.carPriceSub}>/ jour</Text>
+            </View>
+          </View>
+
+          <View style={styles.carMeta}>
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>⛽ {v.carburant}</Text>
+            </View>
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>⚙️ {v.boite ?? 'Manuelle'}</Text>
+            </View>
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>👥 {v.places ?? 5}</Text>
+            </View>
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>🛣️ {v.km_jour ?? 300}km</Text>
+            </View>
+          </View>
+
+          <View style={styles.carFooter}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Ionicons name="star" size={14} color={COLORS.gold} />
+              <Text style={styles.carRating}>{v.note ?? 5.0}</Text>
+              <Text style={styles.carRatingSub}>({Math.floor(Math.random() * 50 + 10)})</Text>
+            </View>
+            {v.annee && (
+              <Text style={styles.carYear}>{v.annee}</Text>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
     )
+  }
 
   return (
-    <ScrollView
-      style={s.container}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={BLUE}
-          colors={[BLUE]}
-        />
-      }
-    >
-      {/* ✨ Header (Fausse barre de statut supprimée) */}
-      <View style={s.header}>
-        <View>
-          <Text style={s.headerSub}>Bonjour 👋</Text>
-          <Text style={s.headerName}>{nomUtilisateur || 'Voyageur'}</Text>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerSub}>Bonjour 👋</Text>
+          <Text style={styles.headerName} numberOfLines={1}>
+            {nomUtilisateur || 'Voyageur'}
+          </Text>
         </View>
         <TouchableOpacity
-          style={s.notifBtn}
-          onPress={() => router.push('/notifications' as any)}
+          style={styles.notifBtn}
+          onPress={() => router.push('/notifications')}
         >
-          <Ionicons name="notifications-outline" size={22} color={TEXT} />
+          <Ionicons name="notifications-outline" size={22} color={COLORS.text} />
           {nonLues > 0 && (
-            <View style={s.notifBadge}>
-              <Text style={s.notifBadgeText}>{nonLues > 9 ? '9+' : nonLues}</Text>
+            <View style={styles.notifBadge}>
+              <Text style={styles.notifBadgeText}>{nonLues > 9 ? '9+' : nonLues}</Text>
             </View>
           )}
         </TouchableOpacity>
       </View>
 
-      {/* ✨ Search */}
-      <View style={s.searchBar}>
-        <Ionicons name="search" size={20} color={TEXT3} />
+      {/* Search */}
+      <View style={styles.searchBar}>
+        <Ionicons name="search" size={20} color={COLORS.text3} />
         <TextInput
-          style={s.searchInput}
-          placeholder="Chercher une voiture ou une ville..."
-          placeholderTextColor={TEXT3}
+          style={styles.searchInput}
+          placeholder="Chercher par voiture, ville, agence..."
+          placeholderTextColor={COLORS.text3}
           value={search}
-          onChangeText={setSearch}
-          autoCapitalize="words"
+          onChangeText={handleSearch}
+          autoCapitalize="none"
+          returnKeyType="search"
         />
         {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-            <Ionicons name="close-circle" size={20} color={TEXT3} />
+          <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <Ionicons name="close-circle" size={20} color={COLORS.text3} />
           </TouchableOpacity>
         )}
       </View>
 
       {/* Categories */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={s.catsRow}
-        contentContainerStyle={{ paddingHorizontal: 20, gap: 8 }}
-      >
-        {CATS.map(cat => (
-          <TouchableOpacity
-            key={cat}
-            style={[s.cat, activeCat === cat && s.catActive]}
-            onPress={() => setActiveCat(cat)}
-          >
-            <Text style={[s.catText, activeCat === cat && s.catTextActive]}>{cat}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <View style={{ marginBottom: 16 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, gap: 8 }}
+        >
+          {CATEGORIES.map(cat => (
+            <TouchableOpacity
+              key={cat}
+              style={[styles.cat, activeCat === cat && styles.catActive]}
+              onPress={() => setActiveCat(cat)}
+            >
+              <Text style={[styles.catText, activeCat === cat && styles.catTextActive]}>{cat}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
 
       {/* Section header */}
-      <View style={s.sectionHeader}>
-        <Text style={s.sectionTitle}>
-          {activeCat === 'Tous' ? 'Disponibles près de toi' : activeCat}
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>
+          {activeCat === 'Tous' ? 'Disponibles près de vous' : activeCat}
         </Text>
-        <Text style={s.sectionCount}>
+        <Text style={styles.sectionCount}>
           {voituresFiltrees.length} voiture{voituresFiltrees.length > 1 ? 's' : ''}
         </Text>
       </View>
 
-      {/* Car list */}
+      {/* Content */}
       {loading ? (
-        <ActivityIndicator size="large" color={BLUE} style={{ marginTop: 40 }} />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20 }}>
+          {[1, 2, 3].map(i => <SkeletonCard key={i} />)}
+        </ScrollView>
       ) : voituresFiltrees.length === 0 ? (
-        <View style={s.emptyBox}>
-          <Ionicons name="search-outline" size={48} color={TEXT3} style={{ marginBottom: 12 }} />
-          <Text style={{ color: TEXT2, fontSize: 14, textAlign: 'center' }}>
-            Aucune voiture ne correspond à cette recherche.
-          </Text>
-        </View>
+        <EmptyState
+          icon="🔍"
+          title="Aucun résultat"
+          subtitle={search ? `Aucune voiture ne correspond à "${search}"` : "Aucune voiture disponible pour le moment"}
+          action={{ label: 'Réinitialiser les filtres', onPress: () => { setSearch(''); setActiveCat('Tous') } }}
+        />
       ) : (
-        voituresFiltrees.map(v => (
-          <TouchableOpacity
-            key={v.id}
-            style={s.carCard}
-            activeOpacity={0.9}
-            onPress={() => router.push(`/voiture/${v.id}` as any)}
-          >
-            <View style={s.carImgBox}>
-              {v.image_url ? (
-                <Image
-                  source={{ uri: v.image_url }}
-                  style={s.carImg}
-                  resizeMode="cover"
-                />
-              ) : (
-                <Ionicons name="car-sport" size={64} color={TEXT3} />
-              )}
-              {/* Statut badge */}
-              <View style={[s.carBadge, v.statut === 'loue' ? s.badgeLoue : s.badgeDispo]}>
-                <Text style={[s.carBadgeText, { color: v.statut === 'loue' ? '#FCA5A5' : '#34D399' }]}>
-                  {v.statut === 'loue' ? 'Loué' : 'Disponible'}
-                </Text>
-              </View>
-              {/* ✨ Favori (Cible agrandie et icône vectorielle) */}
-              <TouchableOpacity
-                style={s.heartBtn}
-                onPress={() => toggleFavori(v.id)}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              >
-                <Ionicons 
-                  name={favoriIds.has(v.id) ? "heart" : "heart-outline"} 
-                  size={20} 
-                  color={favoriIds.has(v.id) ? RED : TEXT} 
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View style={s.carInfo}>
-              <Text style={s.carName}>{v.nom}</Text>
-              <Text style={s.carAgency}>🏢 {v.agence}</Text>
-              <View style={s.carMeta}>
-                <Text style={s.metaChip}>⛽ {v.carburant}</Text>
-                <Text style={s.metaChip}>⚙️ {v.boite ?? 'Manuelle'}</Text>
-                <Text style={s.metaChip}>👥 {v.places ?? 5} places</Text>
-                <Text style={s.metaChip}>🛣️ {v.km_jour ?? 300} km/j</Text>
-              </View>
-              <View style={s.carFooter}>
-                <Text style={s.carPrice}>
-                  {v.prix.toLocaleString()} DA{' '}
-                  <Text style={s.carPriceSub}>/ jour</Text>
-                </Text>
-                <Text style={s.carRating}>
-                  ⭐ {v.note}{' '}
-                  <Text style={s.carRatingSub}>(42)</Text>
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        ))
+        <FlatList
+          data={voituresFiltrees}
+          keyExtractor={item => item.id}
+          renderItem={renderCarCard}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.blue} colors={[COLORS.blue]} />
+          }
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={10}
+        />
       )}
-      <View style={{ height: 20 }} />
-    </ScrollView>
+    </View>
   )
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: NAVY },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 55, paddingBottom: 16 },
-  headerSub: { fontSize: 13, color: TEXT2, fontWeight: '500' },
-  headerName: { fontSize: 20, fontWeight: '800', color: TEXT, marginTop: 2 },
-  notifBtn: { width: 44, height: 44, backgroundColor: CARD, borderRadius: 22, borderWidth: 0.5, borderColor: BORDER2, justifyContent: 'center', alignItems: 'center', position: 'relative' },
-  notifBadge: { position: 'absolute', top: -2, right: -2, backgroundColor: RED, borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.navy },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
+  headerSub: { fontSize: 13, color: COLORS.text2, fontWeight: '500' },
+  headerName: { fontSize: 20, fontWeight: '800', color: COLORS.text, marginTop: 2 },
+  notifBtn: { width: 44, height: 44, backgroundColor: COLORS.card, borderRadius: 22, borderWidth: 0.5, borderColor: COLORS.border3, justifyContent: 'center', alignItems: 'center', position: 'relative' },
+  notifBadge: { position: 'absolute', top: -2, right: -2, backgroundColor: COLORS.red, borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
   notifBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD, borderWidth: 0.5, borderColor: BORDER2, borderRadius: 14, marginHorizontal: 20, marginBottom: 16, paddingHorizontal: 14, height: 48, gap: 10 },
-  searchInput: { flex: 1, color: TEXT, fontSize: 15 },
-  catsRow: { marginBottom: 20 },
-  cat: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 0.5, borderColor: BORDER2 },
-  catActive: { backgroundColor: BLUE, borderColor: BLUE },
-  catText: { fontSize: 13, fontWeight: '500', color: TEXT2 },
-  catTextActive: { color: '#fff', fontWeight: '600' },
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderWidth: 0.5, borderColor: COLORS.border3, borderRadius: 14, marginHorizontal: 20, marginBottom: 16, paddingHorizontal: 14, height: 48, gap: 10 },
+  searchInput: { flex: 1, color: COLORS.text, fontSize: 15 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 14 },
-  sectionTitle: { fontSize: 17, fontWeight: '700', color: TEXT },
-  sectionCount: { fontSize: 13, fontWeight: '500', color: TEXT2 },
-  emptyBox: { alignItems: 'center', paddingTop: 40, paddingHorizontal: 30 },
-  carCard: { marginHorizontal: 20, marginBottom: 14, backgroundColor: CARD, borderRadius: 16, overflow: 'hidden', borderWidth: 0.5, borderColor: BORDER2 },
-  carImgBox: { height: 160, backgroundColor: CARD2, justifyContent: 'center', alignItems: 'center', position: 'relative' },
+  sectionTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text },
+  sectionCount: { fontSize: 13, fontWeight: '500', color: COLORS.text2 },
+  cat: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 0.5, borderColor: COLORS.border3, backgroundColor: COLORS.card },
+  catActive: { backgroundColor: COLORS.blue, borderColor: COLORS.blue },
+  catText: { fontSize: 13, fontWeight: '500', color: COLORS.text2 },
+  catTextActive: { color: '#fff', fontWeight: '600' },
+  carCard: { marginBottom: 14, backgroundColor: COLORS.card, borderRadius: 16, overflow: 'hidden', borderWidth: 0.5, borderColor: COLORS.border3 },
+  carImgBox: { height: 180, backgroundColor: COLORS.card2, justifyContent: 'center', alignItems: 'center', position: 'relative' },
   carImg: { width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 },
   carBadge: { position: 'absolute', top: 12, right: 12, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20 },
   badgeDispo: { backgroundColor: 'rgba(16,185,129,0.2)', borderWidth: 0.5, borderColor: 'rgba(52,211,153,0.3)' },
   badgeLoue: { backgroundColor: 'rgba(239,68,68,0.2)', borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.3)' },
   carBadgeText: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
-  heartBtn: { position: 'absolute', top: 12, left: 12, width: 36, height: 36, backgroundColor: 'rgba(10,22,40,0.6)', borderRadius: 18, justifyContent: 'center', alignItems: 'center', borderWidth: 0.5, borderColor: BORDER2 },
+  heartBtn: { position: 'absolute', top: 12, left: 12, width: 36, height: 36, backgroundColor: 'rgba(10,22,40,0.6)', borderRadius: 18, justifyContent: 'center', alignItems: 'center', borderWidth: 0.5, borderColor: COLORS.border3 },
   carInfo: { padding: 14 },
-  carName: { fontSize: 16, fontWeight: '700', color: TEXT, marginBottom: 4 },
-  carAgency: { fontSize: 13, color: TEXT2, marginBottom: 10 },
-  carMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 12 },
-  metaChip: { fontSize: 12, color: TEXT2 },
+  carName: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 2 },
+  carAgency: { fontSize: 12, color: COLORS.text2, marginBottom: 10 },
+  carMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  metaChip: { backgroundColor: COLORS.navyLight, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 0.5, borderColor: COLORS.border },
+  metaChipText: { fontSize: 11, color: COLORS.text2, fontWeight: '500' },
   carFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  carPrice: { fontSize: 18, fontWeight: '800', color: GOLD },
-  carPriceSub: { fontSize: 12, fontWeight: '400', color: TEXT2 },
-  carRating: { fontSize: 13, fontWeight: '600', color: TEXT },
-  carRatingSub: { fontSize: 11, color: TEXT2 },
+  carPrice: { fontSize: 16, fontWeight: '800', color: COLORS.gold },
+  carPriceSub: { fontSize: 11, fontWeight: '400', color: COLORS.text2 },
+  carRating: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  carRatingSub: { fontSize: 11, color: COLORS.text2 },
+  carYear: { fontSize: 12, color: COLORS.text3, fontWeight: '500' },
+  emptyBox: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 30 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 6 },
+  emptySub: { fontSize: 13, color: COLORS.text2, textAlign: 'center', marginBottom: 20 },
+  emptyBtn: { borderWidth: 0.5, borderColor: COLORS.border3, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 24 },
+  emptyBtnText: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
 })

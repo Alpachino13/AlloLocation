@@ -1,28 +1,16 @@
-import { useEffect, useState } from 'react'
-import { ActivityIndicator, Alert, Image, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  ActivityIndicator, Alert, Image, RefreshControl, ScrollView,
+  StyleSheet, Text, TouchableOpacity, View, Dimensions
+} from 'react-native'
 import { useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
+import { COLORS, formatDA, STATUS_COLORS } from '../constants'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-const NAVY = '#0A1628'
-const NAVY2 = '#0D1E35'
-const CARD = '#1E2D45'
-const CARD2 = '#243352'
-const CARD3 = '#2A3A5C'
-const BLUE = '#2563EB'
-const BLUE_L = '#3B7FF5'
-const BLUE_D = '#1D4ED8'
-const GOLD = '#F59E0B'
-const GOLD_L = '#FCD34D'
-const GREEN = '#10B981'
-const GREEN_L = '#34D399'
-const RED = '#EF4444'
-const RED_L = '#FCA5A5'
-const TEXT = '#F8FAFC'
-const TEXT2 = '#94A3B8'
-const TEXT3 = '#475569'
-const BORDER = 'rgba(255,255,255,0.06)'
-const BORDER2 = 'rgba(255,255,255,0.10)'
+const { width: SW } = Dimensions.get('window')
 
 const DAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
 
@@ -33,7 +21,9 @@ type Reservation = {
   date_debut: string
   date_fin: string
   montant: number
+  created_at: string
   voitures: { nom: string; agence_id?: string; image_url?: string | null } | null
+  profils?: { nom?: string; telephone?: string } | null
 }
 
 type WeekBar = { lbl: string; val: number; h: number; gold: boolean }
@@ -74,6 +64,8 @@ function formatAmount(n: number) {
 export default function Dashboard() {
   const router = useRouter()
   const { session } = useAuth()
+  const insets = useSafeAreaInsets()
+
   const [nomAgence, setNomAgence] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -81,15 +73,33 @@ export default function Dashboard() {
   const [disponibles, setDisponibles] = useState(0)
   const [totalRes, setTotalRes] = useState(0)
   const [revenusMois, setRevenusMois] = useState(0)
-  const [benefice, setBenefice] = useState(0)
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [weekBars, setWeekBars] = useState<WeekBar[]>(
     DAY_LABELS.map((lbl, i) => ({ lbl, val: 0, h: 6, gold: false }))
   )
 
   useEffect(() => {
-    if (session) { charger(); fetchNomAgence() }
+    if (session) {
+      charger()
+      fetchNomAgence()
+      subscribeReservations()
+    }
+    return () => { supabase.removeAllChannels() }
   }, [session])
+
+  function subscribeReservations() {
+    if (!session?.user?.id) return
+    const channel = supabase.channel('dashboard-reservations')
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'reservations',
+        filter: `user_id=eq.${session.user.id}`
+      }, () => {
+        fetchReservations()
+        fetchVoitures()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }
 
   async function fetchNomAgence() {
     if (!session) return
@@ -118,41 +128,57 @@ export default function Dashboard() {
     }
   }
 
-  async function fetchReservations() {
+async function fetchReservations() {
     if (!session) return
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('reservations')
-      .select('id,voiture_id,statut,date_debut,date_fin,montant,voitures!inner(nom,agence_id,image_url)')
+      .select(`
+        id,voiture_id,statut,date_debut,date_fin,montant,created_at,
+        voitures!inner(nom,agence_id,image_url),
+        profils!user_id(nom,telephone)
+      `)
       .eq('voitures.agence_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(50)
+
+    if (error) {
+      console.error('fetchReservations error:', error)
+      return
+    }
 
     if (data) {
       setReservations(data as any)
       setTotalRes(data.length)
       const mois = new Date().getMonth()
       const rev = data
-        .filter(r => r.statut === 'confirmee' && new Date(r.date_debut).getMonth() === mois)
-        .reduce((s, r) => s + (r.montant ?? 0), 0)
+        .filter((r: any) => r.statut === 'confirmee' && new Date(r.date_debut).getMonth() === mois)
+        .reduce((s: number, r: any) => s + (r.montant ?? 0), 0)
       setRevenusMois(rev)
-      setBenefice(Math.round(rev * 0.82))
       setWeekBars(buildWeekBars(data as any))
     }
   }
 
   async function changerStatut(id: string, statut: string) {
-    // 1. Mettre à jour la réservation
     const { error } = await supabase.from('reservations').update({ statut }).eq('id', id)
     if (error) { Alert.alert('Erreur', error.message); return }
 
-    // 2. Mettre à jour le statut de la voiture en conséquence
     const reservation = reservations.find(r => r.id === id)
     if (reservation?.voiture_id) {
       const statutVoiture = statut === 'confirmee' ? 'loue' : 'disponible'
-      await supabase
-        .from('voitures')
-        .update({ statut: statutVoiture })
-        .eq('id', reservation.voiture_id)
+      await supabase.from('voitures').update({ statut: statutVoiture }).eq('id', reservation.voiture_id)
+    }
+
+    // Notifier le client
+    if (statut === 'confirmee' || statut === 'annulee') {
+      const res = reservations.find(r => r.id === id)
+      if (res) {
+        await supabase.from('notifications').insert({
+          user_id: session!.user.id,
+          titre: statut === 'confirmee' ? 'Réservation confirmée' : 'Réservation refusée',
+          message: `Votre réservation pour ${res.voitures?.nom ?? '—'} a été ${statut === 'confirmee' ? 'confirmée' : 'refusée'}`,
+          type: statut === 'confirmee' ? 'confirmation' : 'annulation',
+        })
+      }
     }
 
     fetchReservations()
@@ -163,119 +189,98 @@ export default function Dashboard() {
   const loues = totalVoitures - disponibles
   const enAttente = reservations.filter(r => r.statut === 'en_attente')
 
-  if (loading) return (
-    <View style={{ flex: 1, backgroundColor: NAVY, justifyContent: 'center', alignItems: 'center' }}>
-      <ActivityIndicator size="large" color={BLUE} />
-    </View>
-  )
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: COLORS.navy, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={COLORS.blue} />
+      </View>
+    )
+  }
 
   return (
     <ScrollView
-      style={s.container}
+      style={[styles.container, { paddingTop: insets.top }]}
       showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BLUE} />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.blue} />}
     >
-      {/* Status bar */}
-      <View style={s.statusBar}>
-        <Text style={s.time}>9:41</Text>
-        <Text style={{ color: TEXT, fontSize: 13 }}>📶 🔋</Text>
-      </View>
-
       {/* Header */}
-      <View style={s.header}>
-        <View>
-          <Text style={s.headerSub}>Vue d'ensemble</Text>
-          <Text style={s.headerTitle}>{nomAgence || 'Mon Agence'}</Text>
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerSub}>Vue d'ensemble</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>{nomAgence || 'Mon Agence'}</Text>
         </View>
-        <TouchableOpacity style={s.addBtn} onPress={() => router.push('/ajouter-voiture' as any)}>
-          <Text style={s.addBtnIcon}>＋</Text>
-          <Text style={s.addBtnText}>Ajouter</Text>
+        <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/ajouter-voiture')}>
+          <Ionicons name="add" size={18} color="#fff" />
+          <Text style={styles.addBtnText}>Ajouter</Text>
         </TouchableOpacity>
       </View>
 
-      {/* ── KPI STRIP ── */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.kpiStrip}>
-        <KpiCard icon="💰" label="Revenus ce mois" value={`${formatAmount(revenusMois)} DA`} color={GOLD} />
-        <KpiCard icon="📅" label="Réservations" value={String(totalRes)} color={BLUE_L} sub={`${enAttente.length} en attente`} />
-        <KpiCard icon="📈" label="Bénéfice net" value={`${formatAmount(benefice)} DA`} color={GREEN} sub="≈ 82% des revenus" />
-        <KpiCard icon="🚗" label="Flotte dispo" value={`${disponibles}/${totalVoitures}`} color={TEXT2} sub={`${taux}% occupé`} />
+      {/* KPI Strip */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kpiStrip}>
+        <KpiCard icon="💰" label="Revenus ce mois" value={formatAmount(revenusMois) + ' DA'} color={COLORS.gold} />
+        <KpiCard icon="📅" label="Réservations" value={String(totalRes)} color={COLORS.blueLight} sub={`${enAttente.length} en attente`} />
+        <KpiCard icon="🚗" label="Flotte dispo" value={`${disponibles}/${totalVoitures}`} color={COLORS.text2} sub={`${taux}% occupé`} />
+        <KpiCard icon="✅" label="Taux conf." value={totalRes > 0 ? `${Math.round(reservations.filter(r => r.statut === 'confirmee').length / totalRes * 100)}%` : '—'} color={COLORS.green} />
       </ScrollView>
 
-      {/* ── WEEKLY CHART ── */}
-      <View style={s.section}>
-        <View style={s.sectionTop}>
-          <Text style={s.sectionTitle}>Revenus hebdomadaires</Text>
-          <View style={s.legendRow}>
-            <View style={[s.legendDot, { backgroundColor: GOLD }]} />
-            <Text style={s.legendLabel}>Aujourd'hui</Text>
-            <View style={[s.legendDot, { backgroundColor: BLUE, marginLeft: 10 }]} />
-            <Text style={s.legendLabel}>Autres jours</Text>
+      {/* Weekly Chart */}
+      <View style={styles.section}>
+        <View style={styles.sectionTop}>
+          <Text style={styles.sectionTitle}>Revenus hebdomadaires</Text>
+          <View style={styles.legendRow}>
+            <View style={[styles.legendDot, { backgroundColor: COLORS.gold }]} />
+            <Text style={styles.legendLabel}>Aujourd'hui</Text>
           </View>
         </View>
-        <View style={s.chartWrap}>
+        <View style={styles.chartWrap}>
           {weekBars.map((bar, i) => (
-            <View key={i} style={s.barCol}>
-              {bar.val > 0 && (
-                <Text style={s.barValue}>{formatAmount(bar.val)}</Text>
-              )}
-              <View style={s.barTrack}>
-                <View style={[
-                  s.barFill,
-                  { height: bar.h, backgroundColor: bar.gold ? GOLD : BLUE_L },
-                  bar.gold && s.barGlow,
-                ]} />
+            <View key={i} style={styles.barCol}>
+              {bar.val > 0 && <Text style={styles.barValue}>{formatAmount(bar.val)}</Text>}
+              <View style={styles.barTrack}>
+                <View style={[styles.barFill, { height: bar.h, backgroundColor: bar.gold ? COLORS.gold : COLORS.blueLight }]} />
               </View>
-              <Text style={[s.barLabel, bar.gold && { color: GOLD, fontWeight: '700' }]}>{bar.lbl}</Text>
+              <Text style={[styles.barLabel, bar.gold && { color: COLORS.gold, fontWeight: '700' }]}>{bar.lbl}</Text>
             </View>
           ))}
         </View>
       </View>
 
-      {/* ── OCCUPATION GAUGE ── */}
-      <View style={s.section}>
-        <Text style={s.sectionTitle}>Occupation de la flotte</Text>
-        <View style={s.gaugeCard}>
-          <View style={s.gaugeMeta}>
-            <View style={s.gaugeItem}>
-              <Text style={[s.gaugeNum, { color: BLUE_L }]}>{loues}</Text>
-              <Text style={s.gaugeLabel}>Loués</Text>
-            </View>
-            <View style={s.gaugeDivider} />
-            <View style={s.gaugeItem}>
-              <Text style={[s.gaugeNum, { color: GREEN_L }]}>{disponibles}</Text>
-              <Text style={s.gaugeLabel}>Disponibles</Text>
-            </View>
-            <View style={s.gaugeDivider} />
-            <View style={s.gaugeItem}>
-              <Text style={[s.gaugeNum, { color: TEXT }]}>{totalVoitures}</Text>
-              <Text style={s.gaugeLabel}>Total</Text>
-            </View>
+      {/* Occupation */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Occupation de la flotte</Text>
+        <View style={styles.gaugeCard}>
+          <View style={styles.gaugeMeta}>
+            <GaugeItem label="Loués" value={loues} color={COLORS.blueLight} />
+            <View style={styles.gaugeDivider} />
+            <GaugeItem label="Disponibles" value={disponibles} color={COLORS.greenLight} />
+            <View style={styles.gaugeDivider} />
+            <GaugeItem label="Total" value={totalVoitures} color={COLORS.text} />
           </View>
-          <View style={s.progressTrack}>
-            <View style={[s.progressFill, { width: `${taux}%` as any }]} />
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${taux}%` }]} />
           </View>
-          <View style={s.progressLabels}>
-            <Text style={s.progressPct}>{taux}% occupé</Text>
-            <Text style={s.progressPct}>{100 - taux}% libre</Text>
+          <View style={styles.progressLabels}>
+            <Text style={styles.progressPct}>{taux}% occupé</Text>
+            <Text style={styles.progressPct}>{100 - taux}% libre</Text>
           </View>
         </View>
       </View>
 
-      {/* ── PENDING RESERVATIONS ── */}
-      <View style={s.section}>
-        <View style={s.sectionTop}>
-          <Text style={s.sectionTitle}>En attente</Text>
+      {/* Pending Reservations */}
+      <View style={styles.section}>
+        <View style={styles.sectionTop}>
+          <Text style={styles.sectionTitle}>En attente</Text>
           {enAttente.length > 0 && (
-            <View style={s.badge}>
-              <Text style={s.badgeText}>{enAttente.length}</Text>
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{enAttente.length}</Text>
             </View>
           )}
         </View>
 
         {enAttente.length === 0 ? (
-          <View style={s.emptyState}>
-            <Text style={s.emptyIcon}>✅</Text>
-            <Text style={s.emptyText}>Aucune réservation en attente</Text>
+          <View style={styles.emptyState}>
+            <Ionicons name="checkmark-done-circle-outline" size={40} color={COLORS.green} />
+            <Text style={styles.emptyText}>Aucune réservation en attente</Text>
           </View>
         ) : (
           enAttente.map(res => {
@@ -283,43 +288,41 @@ export default function Dashboard() {
             const nom = res.voitures?.nom ?? '—'
             const debut = res.date_debut?.slice(0, 10) ?? '—'
             const fin = res.date_fin?.slice(0, 10) ?? '—'
-            const duree = Math.max(1, Math.round(
-              (new Date(res.date_fin).getTime() - new Date(res.date_debut).getTime()) / 86400000
-            ))
+            const duree = Math.max(1, Math.round((new Date(res.date_fin).getTime() - new Date(res.date_debut).getTime()) / 86400000))
+            const client = (res as any).profils?.nom ?? 'Client'
+            const tel = (res as any).profils?.telephone ?? ''
+
             return (
-              <View key={res.id} style={s.pendingCard}>
-                <View style={s.pendingThumb}>
+              <View key={res.id} style={styles.pendingCard}>
+                <View style={styles.pendingThumb}>
                   {imgUrl ? (
-                    <Image source={{ uri: imgUrl }} style={s.pendingImg} resizeMode="cover" />
+                    <Image source={{ uri: imgUrl }} style={styles.pendingImg} resizeMode="cover" />
                   ) : (
-                    <View style={s.pendingImgFallback}>
-                      <Text style={{ fontSize: 26 }}>🚗</Text>
+                    <View style={styles.pendingImgFallback}>
+                      <Ionicons name="car-sport" size={32} color={COLORS.text3} />
                     </View>
                   )}
-                  <View style={s.pendingPill}>
-                    <Text style={s.pendingPillText}>En attente</Text>
+                  <View style={styles.pendingPill}>
+                    <Text style={styles.pendingPillText}>En attente</Text>
                   </View>
                 </View>
 
-                <View style={s.pendingBody}>
-                  <View style={s.pendingRow}>
-                    <Text style={s.pendingCarName} numberOfLines={1}>{nom}</Text>
-                    <Text style={s.pendingAmount}>{(res.montant ?? 0).toLocaleString()} DA</Text>
+                <View style={styles.pendingBody}>
+                  <View style={styles.pendingRow}>
+                    <Text style={styles.pendingCarName} numberOfLines={1}>{nom}</Text>
+                    <Text style={styles.pendingAmount}>{formatDA(res.montant ?? 0)}</Text>
                   </View>
-                  <Text style={s.pendingDates}>📅 {debut} → {fin} · {duree}j</Text>
+                  <Text style={styles.pendingDates}>📅 {debut} → {fin} · {duree}j</Text>
+                  {client !== 'Client' && <Text style={styles.pendingClient}>👤 {client} {tel ? `· ${tel}` : ''}</Text>}
 
-                  <View style={s.pendingActions}>
-                    <TouchableOpacity
-                      style={s.btnRefuse}
-                      onPress={() => changerStatut(res.id, 'annulee')}
-                    >
-                      <Text style={s.btnRefuseText}>✕  Refuser</Text>
+                  <View style={styles.pendingActions}>
+                    <TouchableOpacity style={styles.btnRefuse} onPress={() => changerStatut(res.id, 'annulee')}>
+                      <Ionicons name="close-circle-outline" size={16} color={COLORS.redLight} />
+                      <Text style={styles.btnRefuseText}>Refuser</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity
-                      style={s.btnConfirm}
-                      onPress={() => changerStatut(res.id, 'confirmee')}
-                    >
-                      <Text style={s.btnConfirmText}>✓  Confirmer</Text>
+                    <TouchableOpacity style={styles.btnConfirm} onPress={() => changerStatut(res.id, 'confirmee')}>
+                      <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
+                      <Text style={styles.btnConfirmText}>Confirmer</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -329,30 +332,31 @@ export default function Dashboard() {
         )}
       </View>
 
-      {/* ── RECENT CONFIRMED ── */}
+      {/* Recent Confirmed */}
       {reservations.filter(r => r.statut === 'confirmee').length > 0 && (
-        <View style={s.section}>
-          <Text style={s.sectionTitle}>Récemment confirmées</Text>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Récemment confirmées</Text>
           {reservations.filter(r => r.statut === 'confirmee').slice(0, 5).map(res => {
             const imgUrl = res.voitures?.image_url ?? null
             const nom = res.voitures?.nom ?? '—'
+            const st = STATUS_COLORS['confirmee']
             return (
-              <View key={res.id} style={s.confirmedRow}>
-                <View style={s.confirmedThumb}>
+              <View key={res.id} style={styles.confirmedRow}>
+                <View style={styles.confirmedThumb}>
                   {imgUrl ? (
-                    <Image source={{ uri: imgUrl }} style={s.confirmedImg} resizeMode="cover" />
+                    <Image source={{ uri: imgUrl }} style={styles.confirmedImg} resizeMode="cover" />
                   ) : (
-                    <Text style={{ fontSize: 20 }}>🚗</Text>
+                    <Ionicons name="car-sport" size={20} color={COLORS.text3} />
                   )}
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.confirmedName} numberOfLines={1}>{nom}</Text>
-                  <Text style={s.confirmedDates}>{res.date_debut?.slice(0, 10)} → {res.date_fin?.slice(0, 10)}</Text>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.confirmedName} numberOfLines={1}>{nom}</Text>
+                  <Text style={styles.confirmedDates}>{res.date_debut?.slice(0, 10)} → {res.date_fin?.slice(0, 10)}</Text>
                 </View>
-                <View style={s.confirmedBadge}>
-                  <Text style={s.confirmedBadgeText}>✓ Confirmée</Text>
+                <View style={[styles.confirmedBadge, { backgroundColor: st.bg, borderColor: st.border }]}>
+                  <Text style={[styles.confirmedBadgeText, { color: st.color }]}>Confirmée</Text>
                 </View>
-                <Text style={s.confirmedAmount}>{(res.montant ?? 0).toLocaleString()} DA</Text>
+                <Text style={styles.confirmedAmount}>{formatDA(res.montant ?? 0)}</Text>
               </View>
             )
           })}
@@ -368,149 +372,86 @@ function KpiCard({ icon, label, value, color, sub }: {
   icon: string; label: string; value: string; color: string; sub?: string
 }) {
   return (
-    <View style={s.kpiCard}>
-      <Text style={s.kpiIcon}>{icon}</Text>
-      <Text style={[s.kpiValue, { color }]}>{value}</Text>
-      <Text style={s.kpiLabel}>{label}</Text>
-      {sub && <Text style={s.kpiSub}>{sub}</Text>}
+    <View style={styles.kpiCard}>
+      <Text style={styles.kpiIcon}>{icon}</Text>
+      <Text style={[styles.kpiValue, { color }]}>{value}</Text>
+      <Text style={styles.kpiLabel}>{label}</Text>
+      {sub && <Text style={styles.kpiSub}>{sub}</Text>}
     </View>
   )
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: NAVY },
+function GaugeItem({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <View style={styles.gaugeItem}>
+      <Text style={[styles.gaugeNum, { color }]}>{value}</Text>
+      <Text style={styles.gaugeLabel}>{label}</Text>
+    </View>
+  )
+}
 
-  statusBar: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingTop: 50, paddingBottom: 8,
-  },
-  time: { fontSize: 15, fontWeight: '700', color: TEXT },
-
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', paddingHorizontal: 20, paddingBottom: 20,
-  },
-  headerSub: { fontSize: 12, color: TEXT3, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: TEXT },
-  addBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: BLUE, borderRadius: 12,
-    paddingHorizontal: 16, paddingVertical: 10,
-  },
-  addBtnIcon: { color: '#fff', fontSize: 16, lineHeight: 18 },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.navy },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 20 },
+  headerSub: { fontSize: 12, color: COLORS.text3, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: COLORS.text },
+  addBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.blue, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10 },
   addBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-
   kpiStrip: { paddingHorizontal: 20, gap: 10, paddingBottom: 4 },
-  kpiCard: {
-    width: 140, backgroundColor: CARD, borderRadius: 16,
-    padding: 16, borderWidth: 0.5, borderColor: BORDER2,
-  },
+  kpiCard: { width: 140, backgroundColor: COLORS.card, borderRadius: 16, padding: 16, borderWidth: 0.5, borderColor: COLORS.border3 },
   kpiIcon: { fontSize: 22, marginBottom: 10 },
   kpiValue: { fontSize: 20, fontWeight: '800', marginBottom: 2 },
-  kpiLabel: { fontSize: 11, color: TEXT2, fontWeight: '500' },
-  kpiSub: { fontSize: 10, color: TEXT3, marginTop: 4 },
-
+  kpiLabel: { fontSize: 11, color: COLORS.text2, fontWeight: '500' },
+  kpiSub: { fontSize: 10, color: COLORS.text3, marginTop: 4 },
   section: { paddingHorizontal: 20, marginTop: 28 },
   sectionTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: TEXT },
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text },
   legendRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot: { width: 7, height: 7, borderRadius: 4 },
-  legendLabel: { fontSize: 10, color: TEXT3 },
-
-  chartWrap: {
-    flexDirection: 'row', alignItems: 'flex-end',
-    backgroundColor: CARD, borderRadius: 16,
-    paddingHorizontal: 14, paddingTop: 16, paddingBottom: 12,
-    borderWidth: 0.5, borderColor: BORDER2, gap: 0,
-    height: 160,
-  },
+  legendLabel: { fontSize: 10, color: COLORS.text3 },
+  chartWrap: { flexDirection: 'row', alignItems: 'flex-end', backgroundColor: COLORS.card, borderRadius: 16, paddingHorizontal: 14, paddingTop: 16, paddingBottom: 12, borderWidth: 0.5, borderColor: COLORS.border3, gap: 0, height: 160 },
   barCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', gap: 4 },
-  barValue: { fontSize: 9, color: TEXT3, textAlign: 'center' },
+  barValue: { fontSize: 9, color: COLORS.text3, textAlign: 'center' },
   barTrack: { width: '60%', height: 100, justifyContent: 'flex-end' },
   barFill: { width: '100%', borderRadius: 4, minHeight: 6 },
-  barGlow: { shadowColor: GOLD, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 6 },
-  barLabel: { fontSize: 10, color: TEXT3, fontWeight: '500' },
-
-  gaugeCard: {
-    backgroundColor: CARD, borderRadius: 16, padding: 20,
-    borderWidth: 0.5, borderColor: BORDER2,
-  },
+  barLabel: { fontSize: 10, color: COLORS.text3, fontWeight: '500' },
+  gaugeCard: { backgroundColor: COLORS.card, borderRadius: 16, padding: 20, borderWidth: 0.5, borderColor: COLORS.border3 },
   gaugeMeta: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 20 },
   gaugeItem: { alignItems: 'center', gap: 4 },
   gaugeNum: { fontSize: 26, fontWeight: '800' },
-  gaugeLabel: { fontSize: 11, color: TEXT3 },
-  gaugeDivider: { width: 1, backgroundColor: BORDER2, marginVertical: 4 },
-  progressTrack: { height: 8, backgroundColor: CARD2, borderRadius: 4, overflow: 'hidden', marginBottom: 8 },
-  progressFill: { height: '100%', backgroundColor: BLUE, borderRadius: 4 },
+  gaugeLabel: { fontSize: 11, color: COLORS.text3 },
+  gaugeDivider: { width: 1, backgroundColor: COLORS.border2, marginVertical: 4 },
+  progressTrack: { height: 8, backgroundColor: COLORS.card2, borderRadius: 4, overflow: 'hidden', marginBottom: 8 },
+  progressFill: { height: '100%', backgroundColor: COLORS.blue, borderRadius: 4 },
   progressLabels: { flexDirection: 'row', justifyContent: 'space-between' },
-  progressPct: { fontSize: 11, color: TEXT3 },
-
-  badge: {
-    backgroundColor: 'rgba(245,158,11,0.2)', borderRadius: 20,
-    paddingHorizontal: 10, paddingVertical: 3,
-    borderWidth: 0.5, borderColor: 'rgba(245,158,11,0.4)',
-  },
-  badgeText: { color: GOLD_L, fontSize: 12, fontWeight: '700' },
-
-  pendingCard: {
-    backgroundColor: CARD, borderRadius: 16,
-    borderWidth: 0.5, borderColor: BORDER2,
-    overflow: 'hidden', marginBottom: 12,
-  },
-  pendingThumb: { width: '100%', height: 140, backgroundColor: CARD2, position: 'relative' },
+  progressPct: { fontSize: 11, color: COLORS.text3 },
+  badge: { backgroundColor: 'rgba(245,158,11,0.2)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3, borderWidth: 0.5, borderColor: 'rgba(245,158,11,0.4)' },
+  badgeText: { color: COLORS.goldLight, fontSize: 12, fontWeight: '700' },
+  emptyState: { backgroundColor: COLORS.card, borderRadius: 16, padding: 30, borderWidth: 0.5, borderColor: COLORS.border3, alignItems: 'center', gap: 8 },
+  emptyText: { color: COLORS.text2, fontSize: 14 },
+  pendingCard: { backgroundColor: COLORS.card, borderRadius: 16, borderWidth: 0.5, borderColor: COLORS.border3, overflow: 'hidden', marginBottom: 12 },
+  pendingThumb: { width: '100%', height: 140, backgroundColor: COLORS.card2, position: 'relative' },
   pendingImg: { width: '100%', height: '100%' },
   pendingImgFallback: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  pendingPill: {
-    position: 'absolute', top: 10, left: 10,
-    backgroundColor: 'rgba(245,158,11,0.25)',
-    borderWidth: 0.5, borderColor: 'rgba(245,158,11,0.5)',
-    borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4,
-  },
-  pendingPillText: { color: GOLD_L, fontSize: 11, fontWeight: '600' },
+  pendingPill: { position: 'absolute', top: 10, left: 10, backgroundColor: 'rgba(245,158,11,0.25)', borderWidth: 0.5, borderColor: 'rgba(245,158,11,0.5)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  pendingPillText: { color: COLORS.goldLight, fontSize: 11, fontWeight: '600' },
   pendingBody: { padding: 14 },
   pendingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  pendingCarName: { fontSize: 15, fontWeight: '700', color: TEXT, flex: 1, marginRight: 8 },
-  pendingAmount: { fontSize: 16, fontWeight: '800', color: GOLD },
-  pendingDates: { fontSize: 12, color: TEXT2, marginBottom: 14 },
+  pendingCarName: { fontSize: 15, fontWeight: '700', color: COLORS.text, flex: 1, marginRight: 8 },
+  pendingAmount: { fontSize: 16, fontWeight: '800', color: COLORS.gold },
+  pendingDates: { fontSize: 12, color: COLORS.text2, marginBottom: 4 },
+  pendingClient: { fontSize: 12, color: COLORS.blueLight, marginBottom: 12 },
   pendingActions: { flexDirection: 'row', gap: 8 },
-  btnRefuse: {
-    flex: 1, paddingVertical: 10, borderRadius: 10,
-    backgroundColor: 'rgba(239,68,68,0.12)',
-    borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.3)',
-    alignItems: 'center',
-  },
-  btnRefuseText: { color: RED_L, fontSize: 13, fontWeight: '600' },
-  btnConfirm: {
-    flex: 1.6, paddingVertical: 10, borderRadius: 10,
-    backgroundColor: BLUE, alignItems: 'center',
-  },
+  btnRefuse: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 10, borderRadius: 10, backgroundColor: 'rgba(239,68,68,0.12)', borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.3)' },
+  btnRefuseText: { color: COLORS.redLight, fontSize: 13, fontWeight: '600' },
+  btnConfirm: { flex: 1.6, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 10, borderRadius: 10, backgroundColor: COLORS.blue },
   btnConfirmText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-
-  confirmedRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: CARD, borderRadius: 14, padding: 12,
-    borderWidth: 0.5, borderColor: BORDER2, marginBottom: 8,
-  },
-  confirmedThumb: {
-    width: 46, height: 46, borderRadius: 10, backgroundColor: CARD2,
-    justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
-  },
+  confirmedRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: COLORS.card, borderRadius: 14, padding: 12, borderWidth: 0.5, borderColor: COLORS.border3, marginBottom: 8 },
+  confirmedThumb: { width: 46, height: 46, borderRadius: 10, backgroundColor: COLORS.card2, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   confirmedImg: { width: '100%', height: '100%' },
-  confirmedName: { fontSize: 13, fontWeight: '700', color: TEXT, marginBottom: 2 },
-  confirmedDates: { fontSize: 11, color: TEXT3 },
-  confirmedBadge: {
-    backgroundColor: 'rgba(16,185,129,0.15)',
-    borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3,
-    borderWidth: 0.5, borderColor: 'rgba(16,185,129,0.3)',
-  },
-  confirmedBadgeText: { fontSize: 10, color: GREEN_L, fontWeight: '600' },
-  confirmedAmount: { fontSize: 13, fontWeight: '800', color: GOLD, minWidth: 70, textAlign: 'right' },
-
-  emptyState: {
-    backgroundColor: CARD, borderRadius: 16, padding: 30,
-    borderWidth: 0.5, borderColor: BORDER2,
-    alignItems: 'center', gap: 8,
-  },
-  emptyIcon: { fontSize: 32 },
-  emptyText: { color: TEXT2, fontSize: 14 },
+  confirmedName: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 2 },
+  confirmedDates: { fontSize: 11, color: COLORS.text3 },
+  confirmedBadge: { borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 0.5 },
+  confirmedBadgeText: { fontSize: 10, fontWeight: '600' },
+  confirmedAmount: { fontSize: 13, fontWeight: '800', color: COLORS.gold, minWidth: 70, textAlign: 'right' },
 })

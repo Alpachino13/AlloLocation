@@ -1,30 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
-  ActivityIndicator, Alert, Dimensions, Image, Platform,
-  ScrollView, StyleSheet, Text, TouchableOpacity, View
+  ActivityIndicator, Alert, Dimensions, Image, Linking, Platform,
+  ScrollView, Share, StyleSheet, Text, TouchableOpacity, View
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
-
-// ─── Thème ────────────────────────────────────────────────────────────────────
-const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
-const BLUE = '#2563EB'; const GOLD = '#F59E0B'; const GREEN = '#10B981'
-const RED = '#EF4444'
-const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
-const BORDER = 'rgba(255,255,255,0.08)'; const BORDER2 = 'rgba(255,255,255,0.12)'
+import { COLORS, formatDA } from '../../constants'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { openMapsDirections, formatCoords } from '../../lib/location'
 
 const { width: SW } = Dimensions.get('window')
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
 type Voiture = {
-  id: string; nom: string; agence: string
+  id: string; nom: string; agence: string; agence_id: string
   prix: number; note: number; carburant: string
   boite: string; places: number; km_jour: number
   wilaya: string; statut: string; categorie: string
   image_url: string | null; description: string | null
   annee: number | null; climatisation: boolean | null
+  telephone?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -36,22 +35,16 @@ function addDays(d: Date, n: number) {
   return new Date(d.getTime() + n * 86400000)
 }
 
-function diffDays(a: Date, b: Date) {
-  return Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000))
-}
-
 function displayDate(iso: string) {
   const d = new Date(iso)
-  return d.toLocaleDateString('fr-DZ', { day: '2-digit', month: 'short', year: 'numeric' })
+  return d.toLocaleDateString('fr-DZ', { day: '2-digit', month: 'short' })
 }
 
-// ─── Sélecteur de durée simple ────────────────────────────────────────────────
-function DureeSelector({
-  duree, onChange
-}: { duree: number; onChange: (n: number) => void }) {
-  const options = [1, 2, 3, 5, 7, 14]
+// ─── Sélecteur de durée ────────────────────────────────────────────────
+function DureeSelector({ duree, onChange }: { duree: number; onChange: (n: number) => void }) {
+  const options = [1, 2, 3, 5, 7, 14, 30]
   return (
-    <View style={ds.dureeRow}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
       {options.map(n => (
         <TouchableOpacity
           key={n}
@@ -63,7 +56,7 @@ function DureeSelector({
           </Text>
         </TouchableOpacity>
       ))}
-    </View>
+    </ScrollView>
   )
 }
 
@@ -82,13 +75,14 @@ export default function VoitureDetail() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
   const { session } = useAuth()
+  const insets = useSafeAreaInsets()
 
   const [voiture, setVoiture] = useState<Voiture | null>(null)
   const [loading, setLoading] = useState(true)
   const [isFavori, setIsFavori] = useState(false)
   const [favLoading, setFavLoading] = useState(false)
+  const [imageError, setImageError] = useState(false)
 
-  // Dates de réservation
   const today = new Date()
   const [dateDebut] = useState(formatDate(today))
   const [duree, setDuree] = useState(3)
@@ -115,14 +109,22 @@ export default function VoitureDetail() {
       router.back()
       return
     }
+
+    // Récupérer le téléphone de l'agence
+    if (data.agence_id) {
+      const { data: profil } = await supabase.from('profils').select('telephone').eq('id', data.agence_id).single()
+      if (profil?.telephone) {
+        data.telephone = profil.telephone
+      }
+    }
+
     setVoiture(data)
     setLoading(false)
   }
 
   async function checkFavori() {
     const { data } = await supabase
-      .from('favoris')
-      .select('id')
+      .from('favoris').select('id')
       .eq('user_id', session!.user.id)
       .eq('voiture_id', id)
       .maybeSingle()
@@ -130,117 +132,114 @@ export default function VoitureDetail() {
   }
 
   async function toggleFavori() {
-    if (!session?.user?.id) {
-      router.push('/login' as any); return
-    }
+    if (!session?.user?.id) { router.push('/login'); return }
     setFavLoading(true)
     if (isFavori) {
-      await supabase.from('favoris')
-        .delete()
-        .eq('user_id', session.user.id)
-        .eq('voiture_id', id)
+      await supabase.from('favoris').delete().eq('user_id', session.user.id).eq('voiture_id', id)
       setIsFavori(false)
     } else {
-      await supabase.from('favoris')
-        .insert({ user_id: session.user.id, voiture_id: id })
+      await supabase.from('favoris').insert({ user_id: session.user.id, voiture_id: id })
       setIsFavori(true)
     }
     setFavLoading(false)
   }
 
-  function handleReserver() {
-    if (!session?.user?.id) {
-      router.push('/login' as any); return
+  async function handleShare() {
+    if (!voiture) return
+    try {
+      await Share.share({
+        message: `🚗 ${voiture.nom} - ${formatDA(voiture.prix)}/jour sur AlloLocation\nDisponible à ${voiture.wilaya}`,
+        title: voiture.nom,
+      })
+    } catch { }
+  }
+
+  function handleDirections() {
+    if (voiture?.latitude && voiture?.longitude) {
+      openMapsDirections(voiture.latitude, voiture.longitude, voiture.nom)
     }
+  }
+
+  function handleCall() {
+    if (voiture?.telephone) {
+      Linking.openURL(`tel:${voiture.telephone}`)
+    } else {
+      Alert.alert('Info', 'Numéro de téléphone non disponible')
+    }
+  }
+
+  function handleReserver() {
+    if (!session?.user?.id) { router.push('/login'); return }
     if (voiture?.statut === 'loue') {
       Alert.alert('Indisponible', 'Ce véhicule est actuellement loué.')
       return
     }
-    router.push(
-      `/reservation?id=${id}&date_debut=${dateDebut}&date_fin=${dateFin}` as any
-    )
+    router.push(`/reservation?id=${id}&date_debut=${dateDebut}&date_fin=${dateFin}`)
   }
 
-  // ─── Loading ───────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <View style={[ds.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={GOLD} />
+        <ActivityIndicator size="large" color={COLORS.gold} />
       </View>
     )
   }
 
   if (!voiture) return null
-
-  const dispo = voiture.statut !== 'loue'
+  const dispo = voiture.statut === 'disponible'
 
   return (
     <View style={ds.container}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 120 }}>
-
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
         {/* ── Image hero ────────────────────────────────────────────────────── */}
         <View style={ds.heroBox}>
-          {voiture.image_url ? (
-            <Image
-              source={{ uri: voiture.image_url }}
-              style={ds.heroImg}
-              resizeMode="cover"
-            />
+          {voiture.image_url && !imageError ? (
+            <Image source={{ uri: voiture.image_url }} style={ds.heroImg} resizeMode="cover" onError={() => setImageError(true)} />
           ) : (
             <View style={ds.heroPlaceholder}>
-              <Ionicons name="car-sport" size={80} color={TEXT3} />
+              <Ionicons name="car-sport" size={80} color={COLORS.text3} />
             </View>
           )}
-
-          {/* Overlay dégradé bas */}
           <View style={ds.heroOverlay} />
 
-          {/* Bouton retour */}
-          <TouchableOpacity style={ds.backBtn} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={20} color={TEXT} />
+          <TouchableOpacity style={[ds.iconBtn, { left: 16, top: insets.top + 8 }]} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={20} color={COLORS.text} />
           </TouchableOpacity>
 
-          {/* Bouton favori */}
-          <TouchableOpacity style={ds.heartBtn} onPress={toggleFavori} disabled={favLoading}>
-            <Ionicons
-              name={isFavori ? 'heart' : 'heart-outline'}
-              size={20}
-              color={isFavori ? RED : TEXT}
-            />
+          <TouchableOpacity style={[ds.iconBtn, { right: 64, top: insets.top + 8 }]} onPress={handleShare}>
+            <Ionicons name="share-outline" size={20} color={COLORS.text} />
           </TouchableOpacity>
 
-          {/* Badge statut */}
+          <TouchableOpacity style={[ds.iconBtn, { right: 16, top: insets.top + 8 }]} onPress={toggleFavori} disabled={favLoading}>
+            <Ionicons name={isFavori ? 'heart' : 'heart-outline'} size={20} color={isFavori ? COLORS.red : COLORS.text} />
+          </TouchableOpacity>
+
           <View style={[ds.heroBadge, dispo ? ds.badgeDispo : ds.badgeLoue]}>
-            <Text style={[ds.heroBadgeText, { color: dispo ? '#34D399' : '#FCA5A5' }]}>
+            <Text style={[ds.heroBadgeText, { color: dispo ? COLORS.greenLight : COLORS.redLight }]}>
               {dispo ? 'Disponible' : 'Loué'}
             </Text>
           </View>
 
-          {/* Prix en overlay bas */}
           <View style={ds.heroPriceBox}>
-            <Text style={ds.heroPrice}>
-              {voiture.prix.toLocaleString('fr-DZ')} DA
-              <Text style={ds.heroPriceSub}> / jour</Text>
-            </Text>
-            <Text style={ds.heroRating}>⭐ {voiture.note ?? 5.0}
-              <Text style={ds.heroRatingSub}> (42)</Text>
-            </Text>
+            <Text style={ds.heroPrice}>{formatDA(voiture.prix)}<Text style={ds.heroPriceSub}> / jour</Text></Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Ionicons name="star" size={14} color={COLORS.gold} />
+              <Text style={ds.heroRating}>{voiture.note ?? 5.0}<Text style={ds.heroRatingSub}> (42 avis)</Text></Text>
+            </View>
           </View>
         </View>
 
         {/* ── Infos principales ─────────────────────────────────────────────── */}
         <View style={ds.mainCard}>
           <Text style={ds.carName}>{voiture.nom}</Text>
-          {!!voiture.annee && (
-            <Text style={ds.carYear}>Année {voiture.annee}</Text>
-          )}
+          {!!voiture.annee && <Text style={ds.carYear}>Année {voiture.annee}</Text>}
           <View style={ds.agenceRow}>
-            <Ionicons name="business-outline" size={14} color={TEXT2} />
+            <Ionicons name="business-outline" size={14} color={COLORS.text2} />
             <Text style={ds.agenceText}>{voiture.agence}</Text>
             {!!voiture.wilaya && (
               <>
                 <Text style={ds.dot}>·</Text>
-                <Ionicons name="location-outline" size={14} color={TEXT2} />
+                <Ionicons name="location-outline" size={14} color={COLORS.text2} />
                 <Text style={ds.agenceText}>{voiture.wilaya}</Text>
               </>
             )}
@@ -271,42 +270,60 @@ export default function VoitureDetail() {
         {/* ── Sélecteur de durée ────────────────────────────────────────────── */}
         <View style={ds.section}>
           <Text style={ds.sectionTitle}>Durée de location</Text>
-
           <DureeSelector duree={duree} onChange={setDuree} />
-
-          {/* Récap dates */}
           <View style={ds.datesRow}>
             <View style={ds.dateBox}>
               <Text style={ds.dateLabel}>Départ</Text>
               <Text style={ds.dateValue}>{displayDate(dateDebut)}</Text>
             </View>
             <View style={ds.dateArrow}>
-              <Ionicons name="arrow-forward" size={18} color={TEXT3} />
+              <Ionicons name="arrow-forward" size={18} color={COLORS.text3} />
             </View>
             <View style={ds.dateBox}>
               <Text style={ds.dateLabel}>Retour</Text>
               <Text style={ds.dateValue}>{displayDate(dateFin)}</Text>
             </View>
           </View>
-
-          {/* Total */}
           <View style={ds.totalBox}>
             <Text style={ds.totalLabel}>Total estimé</Text>
-            <Text style={ds.totalValue}>{total.toLocaleString('fr-DZ')} DA</Text>
+            <Text style={ds.totalValue}>{formatDA(total)}</Text>
           </View>
         </View>
 
+        {/* ── Localisation ──────────────────────────────────────────────────── */}
+        {voiture.latitude && voiture.longitude && (
+          <View style={ds.section}>
+            <Text style={ds.sectionTitle}>Localisation</Text>
+            <TouchableOpacity style={ds.locCard} onPress={handleDirections} activeOpacity={0.85}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={ds.locIconBox}>
+                  <Ionicons name="location" size={22} color={COLORS.green} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={ds.locLabel}>Position GPS enregistrée</Text>
+                  <Text style={ds.locCoords}>{formatCoords(voiture.latitude, voiture.longitude)}</Text>
+                </View>
+                <View style={{ alignItems: 'center', gap: 4 }}>
+                  <Ionicons name="navigate-circle" size={28} color={COLORS.blue} />
+                  <Text style={{ fontSize: 10, color: COLORS.blueLight, fontWeight: '600' }}>Y ALLER</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* ── Conditions ────────────────────────────────────────────────────── */}
         <View style={ds.section}>
-          <Text style={ds.sectionTitle}>Conditions</Text>
+          <Text style={ds.sectionTitle}>Conditions de location</Text>
           <View style={ds.condCard}>
             {[
-              { icon: '📄', text: 'Permis de conduire obligatoire' },
-              { icon: '🪪', text: 'Carte nationale d\'identité' },
-              { icon: '💰', text: 'Caution : 20 000 DA' },
-              { icon: '🚗', text: 'Conducteur minimum 21 ans' },
+              { icon: '📄', text: 'Permis de conduire algérien valide' },
+              { icon: '🪪', text: `Carte nationale d'identité (CNI)` },
+              { icon: '💰', text: 'Caution : 20 000 DA (remboursable)' },
+              { icon: '🚗', text: 'Âge minimum : 21 ans' },
+              { icon: '⛽', text: `Véhicule à rendre avec le même niveau d'essence` },
             ].map((c, i) => (
-              <View key={i} style={[ds.condItem, i > 0 && { borderTopWidth: 1, borderTopColor: BORDER }]}>
+              <View key={i} style={[ds.condItem, i > 0 && { borderTopWidth: 1, borderTopColor: COLORS.border }]}>
                 <Text style={ds.condIcon}>{c.icon}</Text>
                 <Text style={ds.condText}>{c.text}</Text>
               </View>
@@ -314,152 +331,93 @@ export default function VoitureDetail() {
           </View>
         </View>
 
+        {/* ── Contact agence ───────────────────────────────────────────────────── */}
+        {voiture.telephone && (
+          <View style={ds.section}>
+            <Text style={ds.sectionTitle}>Contacter l'agence</Text>
+            <TouchableOpacity style={ds.contactCard} onPress={handleCall}>
+              <Ionicons name="call" size={20} color={COLORS.green} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={ds.contactLabel}>Téléphone</Text>
+                <Text style={ds.contactValue}>{voiture.telephone}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.text3} />
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
 
       {/* ── Footer fixe ───────────────────────────────────────────────────────── */}
-      <View style={ds.footer}>
+      <View style={[ds.footer, { paddingBottom: Platform.OS === 'ios' ? insets.bottom + 12 : 16 }]}>
         <View style={ds.footerLeft}>
-          <Text style={ds.footerPrice}>{voiture.prix.toLocaleString('fr-DZ')} DA</Text>
-          <Text style={ds.footerSub}>/ jour · {duree}j = {total.toLocaleString('fr-DZ')} DA</Text>
+          <Text style={ds.footerPrice}>{formatDA(voiture.prix)}</Text>
+          <Text style={ds.footerSub}>/ jour · {duree}j = {formatDA(total)}</Text>
         </View>
-        <TouchableOpacity
-          style={[ds.reserveBtn, !dispo && ds.reserveBtnDisabled]}
-          onPress={handleReserver}
-          activeOpacity={0.85}
-        >
-          <Text style={ds.reserveBtnText}>
-            {dispo ? 'Réserver' : 'Indisponible'}
-          </Text>
+        <TouchableOpacity style={[ds.reserveBtn, !dispo && ds.reserveBtnDisabled]} onPress={handleReserver} activeOpacity={0.85}>
+          <Text style={ds.reserveBtnText}>{dispo ? 'Réserver maintenant' : 'Indisponible'}</Text>
         </TouchableOpacity>
       </View>
     </View>
   )
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const ds = StyleSheet.create({
-  container: { flex: 1, backgroundColor: NAVY },
-
-  // Hero
-  heroBox: { width: SW, height: 280, backgroundColor: CARD2, position: 'relative' },
+  container: { flex: 1, backgroundColor: COLORS.navy },
+  heroBox: { width: SW, height: 300, backgroundColor: COLORS.card2, position: 'relative' },
   heroImg: { width: '100%', height: '100%' },
   heroPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  heroOverlay: {
-    position: 'absolute', bottom: 0, left: 0, right: 0, height: 100,
-    // Dégradé simulé par une vue semi-transparente
-    backgroundColor: 'rgba(10,22,40,0.55)',
-  },
-  backBtn: {
-    position: 'absolute', top: Platform.OS === 'ios' ? 54 : 16, left: 16,
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(10,22,40,0.7)',
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 0.5, borderColor: BORDER2,
-  },
-  heartBtn: {
-    position: 'absolute', top: Platform.OS === 'ios' ? 54 : 16, right: 16,
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: 'rgba(10,22,40,0.7)',
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 0.5, borderColor: BORDER2,
-  },
-  heroBadge: {
-    position: 'absolute', top: Platform.OS === 'ios' ? 60 : 22,
-    left: '50%', transform: [{ translateX: -44 }],
-    paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20,
-  },
-  badgeDispo: { backgroundColor: 'rgba(16,185,129,0.2)', borderWidth: 0.5, borderColor: 'rgba(52,211,153,0.3)' },
-  badgeLoue: { backgroundColor: 'rgba(239,68,68,0.2)', borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.3)' },
-  heroBadgeText: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
-  heroPriceBox: {
-    position: 'absolute', bottom: 14, left: 16, right: 16,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end',
-  },
-  heroPrice: { fontSize: 22, fontWeight: '800', color: GOLD },
-  heroPriceSub: { fontSize: 13, fontWeight: '400', color: TEXT2 },
-  heroRating: { fontSize: 14, fontWeight: '600', color: TEXT },
-  heroRatingSub: { fontSize: 12, color: TEXT2 },
-
-  // Infos principales
+  heroOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 120, backgroundColor: 'rgba(10,22,40,0.6)' },
+  iconBtn: { position: 'absolute', width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(10,22,40,0.7)', justifyContent: 'center', alignItems: 'center', borderWidth: 0.5, borderColor: COLORS.border3 },
+  heroBadge: { position: 'absolute', top: 16, left: '50%', transform: [{ translateX: -50 }], paddingHorizontal: 14, paddingVertical: 5, borderRadius: 20 },
+  badgeDispo: { backgroundColor: 'rgba(16,185,129,0.25)', borderWidth: 0.5, borderColor: 'rgba(52,211,153,0.4)' },
+  badgeLoue: { backgroundColor: 'rgba(239,68,68,0.25)', borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.4)' },
+  heroBadgeText: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  heroPriceBox: { position: 'absolute', bottom: 16, left: 16, right: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  heroPrice: { fontSize: 24, fontWeight: '800', color: COLORS.gold },
+  heroPriceSub: { fontSize: 14, fontWeight: '400', color: COLORS.text2 },
+  heroRating: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  heroRatingSub: { fontSize: 12, color: COLORS.text2 },
   mainCard: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 4 },
-  carName: { fontSize: 22, fontWeight: '800', color: TEXT, marginBottom: 4 },
-  carYear: { fontSize: 13, color: TEXT2, marginBottom: 6 },
+  carName: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  carYear: { fontSize: 14, color: COLORS.text2, marginBottom: 6 },
   agenceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
-  agenceText: { fontSize: 13, color: TEXT2 },
-  dot: { color: TEXT3, marginHorizontal: 2 },
-
-  // Sections
+  agenceText: { fontSize: 14, color: COLORS.text2 },
+  dot: { color: COLORS.text3, marginHorizontal: 2 },
   section: { paddingHorizontal: 20, paddingTop: 24 },
-  sectionTitle: { fontSize: 15, fontWeight: '700', color: TEXT, marginBottom: 12 },
-
-  // Specs
+  sectionTitle: { fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 12 },
   specsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  specChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: CARD, borderRadius: 10, paddingHorizontal: 12,
-    paddingVertical: 8, borderWidth: 0.5, borderColor: BORDER2,
-  },
+  specChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.card, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 0.5, borderColor: COLORS.border3 },
   specIcon: { fontSize: 14 },
-  specLabel: { fontSize: 13, color: TEXT2, fontWeight: '500' },
-
-  // Description
-  description: { fontSize: 14, color: TEXT2, lineHeight: 22 },
-
-  // Sélecteur durée
-  dureeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  dureeChip: {
-    flex: 1, paddingVertical: 10, borderRadius: 10,
-    backgroundColor: CARD, borderWidth: 0.5, borderColor: BORDER2,
-    alignItems: 'center',
-  },
-  dureeChipActive: { backgroundColor: BLUE, borderColor: BLUE },
-  dureeChipText: { fontSize: 13, fontWeight: '600', color: TEXT2 },
+  specLabel: { fontSize: 13, color: COLORS.text2, fontWeight: '500' },
+  description: { fontSize: 14, color: COLORS.text2, lineHeight: 22 },
+  dureeChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10, backgroundColor: COLORS.card, borderWidth: 0.5, borderColor: COLORS.border3 },
+  dureeChipActive: { backgroundColor: COLORS.blue, borderColor: COLORS.blue },
+  dureeChipText: { fontSize: 13, fontWeight: '600', color: COLORS.text2 },
   dureeChipTextActive: { color: '#fff' },
-
-  // Dates
-  datesRow: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: CARD, borderRadius: 14,
-    borderWidth: 0.5, borderColor: BORDER2,
-    padding: 16, marginBottom: 12,
-  },
+  datesRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 14, borderWidth: 0.5, borderColor: COLORS.border3, padding: 16, marginTop: 16, marginBottom: 12 },
   dateBox: { flex: 1 },
-  dateLabel: { fontSize: 11, color: TEXT3, fontWeight: '500', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
-  dateValue: { fontSize: 14, fontWeight: '700', color: TEXT },
+  dateLabel: { fontSize: 11, color: COLORS.text3, fontWeight: '500', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateValue: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   dateArrow: { paddingHorizontal: 12 },
-
-  // Total
-  totalBox: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: CARD2, borderRadius: 12, padding: 14,
-    borderWidth: 0.5, borderColor: BORDER2,
-  },
-  totalLabel: { fontSize: 14, color: TEXT2, fontWeight: '500' },
-  totalValue: { fontSize: 18, fontWeight: '800', color: GOLD },
-
-  // Conditions
-  condCard: { backgroundColor: CARD, borderRadius: 14, borderWidth: 0.5, borderColor: BORDER2, overflow: 'hidden' },
+  totalBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.card2, borderRadius: 12, padding: 14, borderWidth: 0.5, borderColor: COLORS.border3 },
+  totalLabel: { fontSize: 14, color: COLORS.text2, fontWeight: '500' },
+  totalValue: { fontSize: 20, fontWeight: '800', color: COLORS.gold },
+  condCard: { backgroundColor: COLORS.card, borderRadius: 14, borderWidth: 0.5, borderColor: COLORS.border3, overflow: 'hidden' },
   condItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
   condIcon: { fontSize: 16, width: 24, textAlign: 'center' },
-  condText: { fontSize: 13, color: TEXT2, flex: 1 },
-
-  // Footer
-  footer: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 32 : 16,
-    backgroundColor: NAVY,
-    borderTopWidth: 1, borderTopColor: BORDER,
-    gap: 16,
-  },
+  condText: { fontSize: 13, color: COLORS.text2, flex: 1 },
+  contactCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 14, padding: 16, borderWidth: 0.5, borderColor: COLORS.border3 },
+  contactLabel: { fontSize: 12, color: COLORS.text3, marginBottom: 2 },
+  contactValue: { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  footer: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, backgroundColor: COLORS.navy, borderTopWidth: 1, borderTopColor: COLORS.border, gap: 16 },
   footerLeft: { flex: 1 },
-  footerPrice: { fontSize: 17, fontWeight: '800', color: GOLD },
-  footerSub: { fontSize: 11, color: TEXT2, marginTop: 2 },
-  reserveBtn: {
-    backgroundColor: GOLD, borderRadius: 14,
-    paddingHorizontal: 28, paddingVertical: 16,
-  },
-  reserveBtnDisabled: { backgroundColor: TEXT3, opacity: 0.7 },
-  reserveBtnText: { color: NAVY, fontSize: 16, fontWeight: '800' },
+  footerPrice: { fontSize: 18, fontWeight: '800', color: COLORS.gold },
+  footerSub: { fontSize: 11, color: COLORS.text2, marginTop: 2 },
+  reserveBtn: { backgroundColor: COLORS.gold, borderRadius: 14, paddingHorizontal: 28, paddingVertical: 16 },
+  reserveBtnDisabled: { backgroundColor: COLORS.text3, opacity: 0.7 },
+  reserveBtnText: { color: COLORS.navy, fontSize: 15, fontWeight: '800' },
+  locCard: { backgroundColor: COLORS.card, borderRadius: 14, padding: 16, borderWidth: 0.5, borderColor: COLORS.border3 },
+  locIconBox: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(16,185,129,0.15)', justifyContent: 'center', alignItems: 'center' },
+  locLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 2 },
+  locCoords: { fontSize: 12, color: COLORS.text3 },
 })

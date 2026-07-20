@@ -1,127 +1,186 @@
-import { useEffect, useState } from 'react'
-import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { useCallback, useEffect, useState } from 'react'
+import { ActivityIndicator, Alert, Image, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
 import { useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
-
-const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
-const BLUE = '#2563EB'; const GOLD = '#F59E0B'; const GREEN = '#10B981'; const RED = '#EF4444'
-const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
-const BORDER = 'rgba(255,255,255,0.08)'; const BORDER2 = 'rgba(255,255,255,0.12)'
+import { COLORS, STATUS_COLORS, formatDA, timeAgo } from '../constants'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export default function Reservations() {
   const router = useRouter()
   const { session } = useAuth()
+  const insets = useSafeAreaInsets()
+
   const [reservations, setReservations] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
-    if (!session) {
-      setLoading(false)
-      return
-    }
-
-    supabase.from('reservations')
-      .select('id,statut,date_debut,date_fin,montant,voitures(nom,image_url)')
-      .eq('user_id', session.user.id)
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        if (data) setReservations(data)
-        setLoading(false)
-    })
+    if (!session) { setLoading(false); return }
+    fetchReservations()
   }, [session])
 
-  const statutStyle: Record<string, { bg: string; color: string; border: string; label: string }> = {
-    confirmee: { bg: 'rgba(16,185,129,0.15)', color: '#34D399', border: 'rgba(16,185,129,0.3)', label: '✓ Confirmée' },
-    en_attente: { bg: 'rgba(245,158,11,0.15)', color: '#FCD34D', border: 'rgba(245,158,11,0.3)', label: '⏳ En attente' },
-    annulee: { bg: 'rgba(239,68,68,0.15)', color: '#FCA5A5', border: 'rgba(239,68,68,0.3)', label: '✗ Annulée' },
+  async function fetchReservations() {
+    if (!session) return
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('id,statut,date_debut,date_fin,montant,created_at,voitures(nom,image_url,agence)')
+      .eq('user_id', session.user.id)
+      .order('created_at', { ascending: false })
+
+    if (!error && data) setReservations(data)
+    setLoading(false)
   }
 
+  async function onRefresh() {
+    setRefreshing(true)
+    await fetchReservations()
+    setRefreshing(false)
+  }
+
+  async function annulerReservation(id: string) {
+    Alert.alert(
+      'Annuler la réservation ?',
+      'Cette action est irréversible.',
+      [
+        { text: 'Non', style: 'cancel' },
+        {
+          text: 'Oui, annuler',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase.from('reservations').update({ statut: 'annulee' }).eq('id', id)
+            if (error) Alert.alert('Erreur', error.message)
+            else fetchReservations()
+          }
+        }
+      ]
+    )
+  }
+
+  const grouped = reservations.reduce((acc: Record<string, any[]>, res) => {
+    const key = res.statut === 'en_attente' ? 'en_attente' : res.statut === 'confirmee' ? 'confirmee' : 'autres'
+    if (!acc[key]) acc[key] = []
+    acc[key].push(res)
+    return acc
+  }, {})
+
   return (
-    <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
-      <View style={s.statusBar}>
-        <Text style={s.time}>9:41</Text>
-        <Text style={{ color: TEXT, fontSize: 13 }}>📶 🔋</Text>
+    <ScrollView
+      style={[styles.container, { paddingTop: insets.top }]}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.blue} />}
+    >
+      <View style={styles.header}>
+        <Text style={styles.pageTitle}>Mes réservations</Text>
+        <Text style={styles.pageSub}>{reservations.length} réservation{reservations.length > 1 ? 's' : ''}</Text>
       </View>
 
-      <Text style={s.pageTitle}>Mes réservations</Text>
-
       {loading ? (
-        <ActivityIndicator size="large" color={BLUE} style={{ marginTop: 40 }} />
+        <ActivityIndicator size="large" color={COLORS.blue} style={{ marginTop: 40 }} />
       ) : reservations.length === 0 ? (
-        <View style={s.emptyCard}>
-          <Text style={s.emptyIcon}>📅</Text>
-          <Text style={s.emptyTitle}>Aucune réservation</Text>
-          <Text style={s.emptySub}>Vous n'avez pas encore effectué de réservation</Text>
-          <TouchableOpacity style={s.exploreBtn} onPress={() => router.push('/')}>
-            <Text style={s.exploreBtnText}>Explorer les voitures</Text>
+        <View style={styles.emptyCard}>
+          <Ionicons name="calendar-outline" size={48} color={COLORS.text3} />
+          <Text style={styles.emptyTitle}>Aucune réservation</Text>
+          <Text style={styles.emptySub}>Vous n'avez pas encore effectué de réservation</Text>
+          <TouchableOpacity style={styles.exploreBtn} onPress={() => router.push('/')}>
+            <Text style={styles.exploreBtnText}>Explorer les voitures</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        reservations.map(res => {
-          const st = statutStyle[res.statut] ?? statutStyle['en_attente']
-          const nom = (res.voitures as any)?.nom ?? '—'
-          const imgUrl = (res.voitures as any)?.image_url ?? null
-          return (
-            <TouchableOpacity key={res.id} style={s.resvCard} activeOpacity={0.85}>
-              <View style={s.resvEmoji}>
-                {imgUrl ? (
-                  <Image source={{ uri: imgUrl }} style={s.resvImg} resizeMode="cover" />
-                ) : (
-                  <Text style={{ fontSize: 28 }}>🚗</Text>
-                )}
-              </View>
-              <View style={s.resvInfo}>
-                <Text style={s.resvName}>{nom}</Text>
-                <Text style={s.resvDates}>📅 {res.date_debut} → {res.date_fin}</Text>
-                <View style={[s.resvStatus, { backgroundColor: st.bg, borderColor: st.border }]}>
-                  <Text style={[s.resvStatusText, { color: st.color }]}>{st.label}</Text>
-                </View>
-              </View>
-              <Text style={s.resvAmount}>{(res.montant ?? 0).toLocaleString()} DA</Text>
-            </TouchableOpacity>
-          )
-        })
+        <>
+          {grouped.en_attente?.length > 0 && (
+            <View style={styles.group}>
+              <Text style={styles.groupTitle}>⏳ En attente</Text>
+              {grouped.en_attente.map(renderReservationCard)}
+            </View>
+          )}
+          {grouped.confirmee?.length > 0 && (
+            <View style={styles.group}>
+              <Text style={styles.groupTitle}>✅ Confirmées</Text>
+              {grouped.confirmee.map(renderReservationCard)}
+            </View>
+          )}
+          {grouped.autres?.length > 0 && (
+            <View style={styles.group}>
+              <Text style={styles.groupTitle}>📋 Historique</Text>
+              {grouped.autres.map(renderReservationCard)}
+            </View>
+          )}
+        </>
       )}
-
-      <View style={s.ctaCard}>
-        <Text style={s.ctaIcon}>🔍</Text>
-        <Text style={s.ctaTitle}>Trouver une voiture</Text>
-        <Text style={s.ctaSub}>Des centaines de véhicules dans toute l'Algérie</Text>
-        <TouchableOpacity style={s.ctaBtn} onPress={() => router.push('/')}>
-          <Text style={s.ctaBtnText}>Explorer les voitures</Text>
-        </TouchableOpacity>
-      </View>
 
       <View style={{ height: 80 }} />
     </ScrollView>
   )
+
+  function renderReservationCard(res: any) {
+    const st = STATUS_COLORS[res.statut] ?? STATUS_COLORS['en_attente']
+    const nom = res.voitures?.nom ?? '—'
+    const imgUrl = res.voitures?.image_url ?? null
+    const agence = res.voitures?.agence ?? ''
+    const peutAnnuler = res.statut === 'en_attente'
+
+    return (
+      <View key={res.id} style={styles.resvCard}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={styles.resvEmoji}>
+            {imgUrl ? (
+              <Image source={{ uri: imgUrl }} style={styles.resvImg} resizeMode="cover" />
+            ) : (
+              <Ionicons name="car-sport" size={24} color={COLORS.text3} />
+            )}
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.resvName} numberOfLines={1}>{nom}</Text>
+            {agence && <Text style={styles.resvAgence}>🏢 {agence}</Text>}
+            <Text style={styles.resvDates}>
+              📅 {res.date_debut?.slice(0, 10)} → {res.date_fin?.slice(0, 10)}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
+              <View style={[styles.resvStatus, { backgroundColor: st.bg, borderColor: st.border }]}>
+                <Text style={[styles.resvStatusText, { color: st.color }]}>{st.label}</Text>
+              </View>
+              <Text style={styles.resvTime}>{timeAgo(res.created_at)}</Text>
+            </View>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.resvAmount}>{formatDA(res.montant ?? 0)}</Text>
+            {peutAnnuler && (
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => annulerReservation(res.id)}>
+                <Text style={styles.cancelText}>Annuler</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    )
+  }
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: NAVY },
-  statusBar: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 50, paddingBottom: 8 },
-  time: { fontSize: 15, fontWeight: '700', color: TEXT },
-  pageTitle: { fontSize: 24, fontWeight: '800', color: TEXT, paddingHorizontal: 20, paddingBottom: 16 },
-  resvCard: { marginHorizontal: 20, marginBottom: 10, backgroundColor: CARD, borderRadius: 14, padding: 14, borderWidth: 0.5, borderColor: BORDER2, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  resvEmoji: { width: 52, height: 52, backgroundColor: CARD2, borderRadius: 12, justifyContent: 'center', alignItems: 'center', flexShrink: 0, overflow: 'hidden' },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.navy },
+  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
+  pageTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text },
+  pageSub: { fontSize: 13, color: COLORS.text2, marginTop: 2 },
+  group: { paddingHorizontal: 20, marginBottom: 20 },
+  groupTitle: { fontSize: 13, fontWeight: '700', color: COLORS.text2, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  resvCard: { backgroundColor: COLORS.card, borderRadius: 14, padding: 14, borderWidth: 0.5, borderColor: COLORS.border3, marginBottom: 10 },
+  resvEmoji: { width: 52, height: 52, backgroundColor: COLORS.card2, borderRadius: 12, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   resvImg: { width: '100%', height: '100%' },
-  resvInfo: { flex: 1 },
-  resvName: { fontSize: 14, fontWeight: '700', color: TEXT, marginBottom: 3 },
-  resvDates: { fontSize: 12, color: TEXT2, marginBottom: 6 },
+  resvName: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 1 },
+  resvAgence: { fontSize: 11, color: COLORS.text3, marginBottom: 2 },
+  resvDates: { fontSize: 12, color: COLORS.text2 },
   resvStatus: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20, borderWidth: 0.5 },
-  resvStatusText: { fontSize: 11, fontWeight: '600' },
-  resvAmount: { fontSize: 15, fontWeight: '800', color: GOLD },
-  emptyCard: { margin: 20, backgroundColor: CARD, borderRadius: 16, padding: 30, borderWidth: 0.5, borderColor: BORDER2, alignItems: 'center' },
-  emptyIcon: { fontSize: 48, marginBottom: 12 },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: TEXT, marginBottom: 6 },
-  emptySub: { fontSize: 13, color: TEXT2, textAlign: 'center', marginBottom: 20 },
-  ctaCard: { margin: 20, backgroundColor: CARD, borderRadius: 16, padding: 20, borderWidth: 0.5, borderColor: BORDER2, alignItems: 'center' },
-  ctaIcon: { fontSize: 36, marginBottom: 10 },
-  ctaTitle: { fontSize: 15, fontWeight: '700', color: TEXT, marginBottom: 6 },
-  ctaSub: { fontSize: 13, color: TEXT2, textAlign: 'center', marginBottom: 14 },
-  ctaBtn: { borderWidth: 0.5, borderColor: BORDER2, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 24 },
-  ctaBtnText: { color: TEXT, fontSize: 15, fontWeight: '600' },
-  exploreBtn: { borderWidth: 0.5, borderColor: BORDER2, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 24 },
-  exploreBtnText: { color: TEXT, fontSize: 14, fontWeight: '600' },
+  resvStatusText: { fontSize: 10, fontWeight: '600' },
+  resvTime: { fontSize: 10, color: COLORS.text3 },
+  resvAmount: { fontSize: 14, fontWeight: '800', color: COLORS.gold, marginBottom: 6 },
+  cancelBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(239,68,68,0.15)', borderWidth: 0.5, borderColor: 'rgba(239,68,68,0.3)' },
+  cancelText: { fontSize: 11, color: COLORS.redLight, fontWeight: '600' },
+  emptyCard: { margin: 20, backgroundColor: COLORS.card, borderRadius: 16, padding: 30, borderWidth: 0.5, borderColor: COLORS.border3, alignItems: 'center' },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginTop: 12, marginBottom: 6 },
+  emptySub: { fontSize: 13, color: COLORS.text2, textAlign: 'center', marginBottom: 20 },
+  exploreBtn: { borderWidth: 0.5, borderColor: COLORS.border3, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 24 },
+  exploreBtnText: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
 })

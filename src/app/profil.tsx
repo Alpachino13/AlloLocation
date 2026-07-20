@@ -1,147 +1,211 @@
-import { useEffect, useState } from 'react'
-import { StyleSheet, Text, TouchableOpacity, View, ScrollView, ActivityIndicator } from 'react-native'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  ActivityIndicator, Alert, Image, ScrollView, StyleSheet,
+  Text, TouchableOpacity, View, Modal, TextInput
+} from 'react-native'
+import { useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../lib/AuthContext'
 import { supabase } from '../lib/supabase'
-
-const NAVY = '#0A1628'; const CARD = '#1E2D45'; const CARD2 = '#243352'
-const BLUE = '#2563EB'; const BLUE_L = '#3B7FF5'; const GOLD = '#F59E0B'
-const TEXT = '#F8FAFC'; const TEXT2 = '#94A3B8'; const TEXT3 = '#475569'
-const BORDER = 'rgba(255,255,255,0.08)'; const BORDER2 = 'rgba(255,255,255,0.12)'
+import { COLORS, formatDA } from '../constants'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export default function Profil() {
+  const router = useRouter()
   const { session, role, signOut } = useAuth()
-  const email = session?.user?.email ?? session?.user?.phone ?? 'Utilisateur'
-  const roleLabel = role === 'agence' ? '🏢 Agence vérifiée' : role === 'admin' ? '⚡ Admin' : '✅ Client vérifié'
-  const initiale = email[0]?.toUpperCase() ?? 'M'
+  const insets = useSafeAreaInsets()
 
-  const [nom, setNom] = useState<string>('')
-  const [nbReservations, setNbReservations] = useState<number>(0)
-  const [nbFavoris, setNbFavoris] = useState<number>(0)
+  const email = session?.user?.email ?? 'Utilisateur'
+  const roleLabel = role === 'agence' ? '🏢 Agence' : role === 'admin' ? '⚡ Admin' : '👤 Client'
+
+  const [nom, setNom] = useState('')
+  const [telephone, setTelephone] = useState('')
+  const [wilaya, setWilaya] = useState('')
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
+  const [nbReservations, setNbReservations] = useState(0)
+  const [nbFavoris, setNbFavoris] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [editModal, setEditModal] = useState(false)
+  const [editNom, setEditNom] = useState('')
+  const [editTel, setEditTel] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (session?.user?.id) fetchProfilData()
-  }, [session?.user?.id])
+  const fetchProfilData = useCallback(async () => {
+    if (!session?.user?.id) return
+    const userId = session.user.id
 
-  async function fetchProfilData() {
-    const userId = session!.user.id
+    const { data: profilData } = await supabase.from('profils').select('nom,telephone,wilaya,photo_url').eq('id', userId).single()
+    if (profilData) {
+      setNom(profilData.nom ?? '')
+      setTelephone(profilData.telephone ?? '')
+      setWilaya(profilData.wilaya ?? '')
+      setPhotoUrl(profilData.photo_url ?? null)
+      setEditNom(profilData.nom ?? '')
+      setEditTel(profilData.telephone ?? '')
+    }
 
-    // Nom réel depuis la table profils
-    const { data: profilData } = await supabase
-      .from('profils')
-      .select('nom')
-      .eq('id', userId)
-      .single()
-
-    if (profilData?.nom) setNom(profilData.nom)
-
-    // Nombre réel de réservations du user connecté
-    const { count: resCount } = await supabase
-      .from('reservations')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
-
+    const { count: resCount } = await supabase.from('reservations').select('*', { count: 'exact', head: true }).eq('user_id', userId)
     setNbReservations(resCount ?? 0)
 
-    // Nombre réel de favoris du user connecté
-    const { count: favCount } = await supabase
-      .from('favoris')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
-
+    const { count: favCount } = await supabase.from('favoris').select('*', { count: 'exact', head: true }).eq('user_id', userId)
     setNbFavoris(favCount ?? 0)
     setLoading(false)
+  }, [session?.user?.id])
+
+  useEffect(() => { fetchProfilData() }, [fetchProfilData])
+
+  async function saveProfil() {
+    if (!session?.user?.id) return
+    setSaving(true)
+    const { error } = await supabase.from('profils').update({
+      nom: editNom.trim(),
+      telephone: editTel.trim(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', session.user.id)
+    setSaving(false)
+    if (error) Alert.alert('Erreur', error.message)
+    else {
+      setNom(editNom.trim())
+      setTelephone(editTel.trim())
+      setEditModal(false)
+    }
   }
 
+  async function handleSignOut() {
+    Alert.alert('Déconnexion', 'Voulez-vous vraiment vous déconnecter ?', [
+      { text: 'Annuler', style: 'cancel' },
+      { text: 'Déconnecter', style: 'destructive', onPress: signOut }
+    ])
+  }
+
+  const menuItems = [
+    { icon: 'calendar-outline', label: 'Mes réservations', value: String(nbReservations), onPress: () => router.push('/reservations') },
+    { icon: 'heart-outline', label: 'Mes favoris', value: String(nbFavoris), onPress: () => router.push('/favoris') },
+    { icon: 'notifications-outline', label: 'Notifications', onPress: () => router.push('/notifications') },
+    { icon: 'help-circle-outline', label: 'Aide & support', onPress: () => {} },
+  ]
+
   return (
-    <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
-      <View style={s.statusBar}>
-        <Text style={s.time}>9:41</Text>
-        <Text style={{ color: TEXT, fontSize: 13 }}>📶 🔋</Text>
+    <ScrollView style={[styles.container, { paddingTop: insets.top }]} showsVerticalScrollIndicator={false}>
+      <View style={styles.header}>
+        <Text style={styles.pageTitle}>Mon profil</Text>
+        <TouchableOpacity style={styles.editBtn} onPress={() => setEditModal(true)}>
+          <Ionicons name="create-outline" size={18} color={COLORS.blueLight} />
+        </TouchableOpacity>
       </View>
 
-      <Text style={s.pageTitle}>Mon profil</Text>
-
       {/* Profile card */}
-      <View style={s.profileCard}>
-        <View style={s.profileBanner} />
-        <View style={s.profileBody}>
-          <View style={s.avatar}>
-            <Text style={s.avatarText}>{initiale}</Text>
-          </View>
-          <View style={{ paddingTop: 38 }}>
-            {loading ? (
-              <ActivityIndicator size="small" color={BLUE} style={{ alignSelf: 'flex-start', marginVertical: 8 }} />
+      <View style={styles.profileCard}>
+        <View style={styles.profileBanner} />
+        <View style={styles.profileBody}>
+          <View style={styles.avatar}>
+            {photoUrl ? (
+              <Image source={{ uri: photoUrl }} style={{ width: '100%', height: '100%', borderRadius: 35 }} />
             ) : (
-              <Text style={s.profileName}>{nom || 'Utilisateur'}</Text>
+              <Text style={styles.avatarText}>{(nom || email)[0]?.toUpperCase() ?? 'U'}</Text>
             )}
-            <Text style={s.profileEmail}>{email}</Text>
-            <View style={s.roleBadge}>
-              <Text style={s.roleBadgeText}>{roleLabel}</Text>
-            </View>
+          </View>
+          <View style={{ paddingTop: 38, flex: 1 }}>
+            {loading ? (
+              <ActivityIndicator size="small" color={COLORS.blue} style={{ alignSelf: 'flex-start', marginVertical: 8 }} />
+            ) : (
+              <>
+                <Text style={styles.profileName} numberOfLines={1}>{nom || 'Utilisateur'}</Text>
+                <Text style={styles.profileEmail} numberOfLines={1}>{email}</Text>
+                {telephone && <Text style={styles.profileTel}>📞 {telephone}</Text>}
+                <View style={styles.roleBadge}>
+                  <Text style={styles.roleBadgeText}>{roleLabel}</Text>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </View>
 
       {/* Stats */}
-      <View style={s.statsRow}>
-        <View style={s.statCard}>
-          <Text style={[s.statVal, { color: BLUE }]}>{loading ? '—' : nbReservations}</Text>
-          <Text style={s.statLabel}>Réservations</Text>
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={[styles.statVal, { color: COLORS.blue }]}>{loading ? '—' : nbReservations}</Text>
+          <Text style={styles.statLabel}>Réservations</Text>
         </View>
-        <View style={s.statCard}>
-          <Text style={[s.statVal, { color: GOLD }]}>{loading ? '—' : nbFavoris}</Text>
-          <Text style={s.statLabel}>Favoris</Text>
+        <View style={styles.statCard}>
+          <Text style={[styles.statVal, { color: COLORS.gold }]}>{loading ? '—' : nbFavoris}</Text>
+          <Text style={styles.statLabel}>Favoris</Text>
         </View>
       </View>
 
       {/* Menu */}
-      {[
-        { icon: '🪪', label: 'Mes documents' },
-        { icon: '🔔', label: 'Notifications' },
-        { icon: '❓', label: 'Aide & support' },
-        { icon: '⚙️', label: 'Paramètres' },
-      ].map((item, i) => (
-        <TouchableOpacity key={item.label} style={[s.menuItem, i === 0 && { borderTopWidth: 0 }]}>
-          <View style={s.menuIcon}>
-            <Text style={{ fontSize: 18 }}>{item.icon}</Text>
+      {menuItems.map((item, i) => (
+        <TouchableOpacity key={item.label} style={[styles.menuItem, i === 0 && { borderTopWidth: 0 }]} onPress={item.onPress}>
+          <View style={styles.menuIcon}>
+            <Ionicons name={item.icon as any} size={18} color={COLORS.text2} />
           </View>
-          <Text style={s.menuLabel}>{item.label}</Text>
-          <Text style={{ color: TEXT3, fontSize: 18 }}>›</Text>
+          <Text style={styles.menuLabel}>{item.label}</Text>
+          {item.value && <Text style={styles.menuValue}>{item.value}</Text>}
+          <Ionicons name="chevron-forward" size={16} color={COLORS.text3} />
         </TouchableOpacity>
       ))}
 
-      <TouchableOpacity style={[s.menuItem, { marginTop: 10 }]} onPress={signOut}>
-        <View style={[s.menuIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
-          <Text style={{ fontSize: 18 }}>🚪</Text>
+      <TouchableOpacity style={[styles.menuItem, { marginTop: 10 }]} onPress={handleSignOut}>
+        <View style={[styles.menuIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
+          <Ionicons name="log-out-outline" size={18} color={COLORS.red} />
         </View>
-        <Text style={[s.menuLabel, { color: '#FCA5A5' }]}>Se déconnecter</Text>
+        <Text style={[styles.menuLabel, { color: COLORS.redLight }]}>Se déconnecter</Text>
       </TouchableOpacity>
 
       <View style={{ height: 80 }} />
+
+      {/* Edit Modal */}
+      <Modal visible={editModal} transparent animationType="fade" onRequestClose={() => setEditModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Modifier le profil</Text>
+            <Text style={styles.modalLabel}>Nom</Text>
+            <TextInput style={styles.modalInput} value={editNom} onChangeText={setEditNom} placeholder="Votre nom" placeholderTextColor={COLORS.text3} />
+            <Text style={styles.modalLabel}>Téléphone</Text>
+            <TextInput style={styles.modalInput} value={editTel} onChangeText={setEditTel} placeholder="05XX XX XX XX" placeholderTextColor={COLORS.text3} keyboardType="phone-pad" />
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+              <TouchableOpacity style={[styles.modalBtn, { flex: 1, backgroundColor: COLORS.card }]} onPress={() => setEditModal(false)}>
+                <Text style={{ color: COLORS.text, fontWeight: '600' }}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, { flex: 1, backgroundColor: COLORS.blue }]} onPress={saveProfil} disabled={saving}>
+                {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>Sauvegarder</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   )
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: NAVY },
-  statusBar: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 50, paddingBottom: 8 },
-  time: { fontSize: 15, fontWeight: '700', color: TEXT },
-  pageTitle: { fontSize: 24, fontWeight: '800', color: TEXT, paddingHorizontal: 20, paddingBottom: 16 },
-  profileCard: { marginHorizontal: 20, marginBottom: 20, backgroundColor: CARD, borderRadius: 20, borderWidth: 0.5, borderColor: BORDER2, overflow: 'hidden' },
-  profileBanner: { height: 70, backgroundColor: '#1a3a6e' },
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.navy },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
+  pageTitle: { fontSize: 24, fontWeight: '800', color: COLORS.text },
+  editBtn: { width: 36, height: 36, backgroundColor: 'rgba(37,99,235,0.15)', borderRadius: 18, justifyContent: 'center', alignItems: 'center', borderWidth: 0.5, borderColor: 'rgba(37,99,235,0.3)' },
+  profileCard: { marginHorizontal: 20, marginBottom: 20, backgroundColor: COLORS.card, borderRadius: 20, borderWidth: 0.5, borderColor: COLORS.border3, overflow: 'hidden' },
+  profileBanner: { height: 70, backgroundColor: COLORS.blueDark },
   profileBody: { padding: 20, paddingTop: 0, position: 'relative' },
-  avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: BLUE, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: NAVY, position: 'absolute', top: -32, left: 20 },
-  avatarText: { color: '#fff', fontSize: 22, fontWeight: '800' },
-  profileName: { fontSize: 20, fontWeight: '800', color: TEXT },
-  profileEmail: { fontSize: 13, color: TEXT2, marginVertical: 4 },
+  avatar: { width: 70, height: 70, borderRadius: 35, backgroundColor: COLORS.blue, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: COLORS.navy, position: 'absolute', top: -35, left: 20, overflow: 'hidden' },
+  avatarText: { color: '#fff', fontSize: 26, fontWeight: '800' },
+  profileName: { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  profileEmail: { fontSize: 13, color: COLORS.text2, marginVertical: 4 },
+  profileTel: { fontSize: 13, color: COLORS.blueLight, marginBottom: 6 },
   roleBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(37,99,235,0.15)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 0.5, borderColor: 'rgba(37,99,235,0.3)' },
-  roleBadgeText: { fontSize: 11, fontWeight: '600', color: BLUE_L },
+  roleBadgeText: { fontSize: 11, fontWeight: '600', color: COLORS.blueLight },
   statsRow: { flexDirection: 'row', gap: 10, marginHorizontal: 20, marginBottom: 20 },
-  statCard: { flex: 1, backgroundColor: CARD, borderRadius: 14, padding: 14, borderWidth: 0.5, borderColor: BORDER2, alignItems: 'center' },
+  statCard: { flex: 1, backgroundColor: COLORS.card, borderRadius: 14, padding: 14, borderWidth: 0.5, borderColor: COLORS.border3, alignItems: 'center' },
   statVal: { fontSize: 24, fontWeight: '800' },
-  statLabel: { fontSize: 11, color: TEXT2, marginTop: 2 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16, paddingHorizontal: 20, borderTopWidth: 0.5, borderTopColor: BORDER },
-  menuIcon: { width: 36, height: 36, backgroundColor: CARD, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
-  menuLabel: { fontSize: 14, fontWeight: '500', color: TEXT, flex: 1 },
+  statLabel: { fontSize: 11, color: COLORS.text2, marginTop: 2 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 16, paddingHorizontal: 20, borderTopWidth: 0.5, borderTopColor: COLORS.border },
+  menuIcon: { width: 36, height: 36, backgroundColor: COLORS.card, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  menuLabel: { fontSize: 14, fontWeight: '500', color: COLORS.text, flex: 1 },
+  menuValue: { fontSize: 13, color: COLORS.text3, marginRight: 4 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  modalContent: { backgroundColor: COLORS.card, borderRadius: 20, padding: 20, borderWidth: 0.5, borderColor: COLORS.border3 },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginBottom: 16 },
+  modalLabel: { fontSize: 12, fontWeight: '600', color: COLORS.text2, marginBottom: 6, marginTop: 10 },
+  modalInput: { backgroundColor: COLORS.navy, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, color: COLORS.text, fontSize: 15, borderWidth: 0.5, borderColor: COLORS.border3 },
+  modalBtn: { borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 10 },
 })
