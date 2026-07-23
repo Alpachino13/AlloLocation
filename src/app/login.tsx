@@ -21,6 +21,10 @@ export default function Login() {
   const [showPwd, setShowPwd] = useState(false)
   const { refreshRole } = useAuth()
 
+  // Champs client
+  const [nomClient, setNomClient] = useState('')
+  const [telephoneClient, setTelephoneClient] = useState('')
+
   // Champs agence
   const [nomAgence, setNomAgence] = useState('')
   const [telephone, setTelephone] = useState('')
@@ -36,6 +40,12 @@ export default function Login() {
     if (!email.trim()) errs.email = 'Email requis'
     else if (!validateEmail(email)) errs.email = 'Email invalide'
     if (!password || password.length < 6) errs.password = 'Min. 6 caractères'
+
+    if (!isLogin && role === 'client') {
+      if (!nomClient.trim()) errs.nomClient = 'Nom requis'
+      if (!telephoneClient.trim()) errs.telephoneClient = 'Téléphone requis'
+      else if (!validatePhoneDZ(telephoneClient)) errs.telephoneClient = 'Format algérien invalide (05XX...)'
+    }
 
     if (!isLogin && role === 'agence') {
       if (!nomAgence.trim()) errs.nomAgence = 'Nom requis'
