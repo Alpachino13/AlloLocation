@@ -71,8 +71,8 @@ export default function Login() {
           options: {
             data: {
               role,
-              nom: role === 'agence' ? nomAgence.trim() : email.split('@')[0],
-              telephone: telephone.trim(),
+              nom: role === 'agence' ? nomAgence.trim() : nomClient.trim(),
+              telephone: role === 'agence' ? telephone.trim() : telephoneClient.trim(),
               num_rc: role === 'agence' ? numRC.trim() : '',
               wilaya: role === 'agence' ? wilaya : '',
               adresse: role === 'agence' ? adresse.trim() : '',
@@ -186,7 +186,41 @@ export default function Login() {
             <>
               <Text style={[styles.fieldLabel, { marginBottom: 10 }]}>JE SUIS</Text>
               <View style={styles.roleToggle}>
-                {(['client', 'agence'] as const).map(r => (
+                {role === 'client' && (
+                <View>
+                  <Text style={styles.sectionDivider}>INFORMATIONS PERSONNELLES</Text>
+
+                  <Text style={styles.fieldLabel}>Nom complet</Text>
+                  <View style={[styles.field, errors.nomClient && styles.fieldError]}>
+                    <Ionicons name="person-outline" size={18} color={COLORS.text3} />
+                    <TextInput
+                      style={styles.fieldInput}
+                      placeholder="ex: Ahmed Benali"
+                      placeholderTextColor={COLORS.text3}
+                      value={nomClient}
+                      onChangeText={setNomClient}
+                      autoCapitalize="words"
+                    />
+                  </View>
+                  {errors.nomClient && <Text style={styles.errorText}>{errors.nomClient}</Text>}
+
+                  <Text style={styles.fieldLabel}>Téléphone</Text>
+                  <View style={[styles.field, errors.telephoneClient && styles.fieldError]}>
+                    <Ionicons name="call-outline" size={18} color={COLORS.text3} />
+                    <TextInput
+                      style={styles.fieldInput}
+                      placeholder="ex: 0550 12 34 56"
+                      placeholderTextColor={COLORS.text3}
+                      value={telephoneClient}
+                      onChangeText={setTelephoneClient}
+                      keyboardType="phone-pad"
+                    />
+                  </View>
+                  {errors.telephoneClient && <Text style={styles.errorText}>{errors.telephoneClient}</Text>}
+                </View>
+              )}
+
+              {(['client', 'agence'] as const).map(r => (
                   <TouchableOpacity
                     key={r}
                     style={[styles.roleOpt, role === r && styles.roleOptActive]}
