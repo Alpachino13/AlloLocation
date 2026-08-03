@@ -1,22 +1,64 @@
 import { useEffect, useState } from 'react'
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import {
+  ScrollView, StyleSheet, Text, TouchableOpacity, View,
+} from 'react-native'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import { COLORS, timeAgo } from '../constants'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type Notif = {
   id: string; titre: string; message: string
   type: string; lu: boolean; created_at: string
 }
 
-const TYPE_STYLE: Record<string, { icon: string; color: string; bg: string }> = {
-  reservation: { icon: 'calendar-outline', color: COLORS.blue, bg: 'rgba(37,99,235,0.15)' },
-  confirmation: { icon: 'checkmark-circle-outline', color: COLORS.green, bg: 'rgba(16,185,129,0.15)' },
-  annulation: { icon: 'close-circle-outline', color: COLORS.red, bg: 'rgba(239,68,68,0.15)' },
-  info: { icon: 'information-circle-outline', color: COLORS.gold, bg: 'rgba(245,158,11,0.15)' },
+const TYPE_META: Record<string, { icon: string; color: string; bg: string }> = {
+  reservation:  { icon: 'calendar',               color: COLORS.blueLight, bg: COLORS.blueMuted },
+  confirmation: { icon: 'checkmark-circle',        color: COLORS.greenLight, bg: COLORS.greenMuted },
+  annulation:   { icon: 'close-circle',            color: COLORS.redLight,  bg: COLORS.redMuted },
+  info:         { icon: 'information-circle',      color: COLORS.gold,       bg: COLORS.goldMuted },
+}
+
+const DEFAULT_META = { icon: 'notifications', color: COLORS.text2, bg: COLORS.card2 }
+
+function NotifCard({ notif, onRead, onDelete }: {
+  notif: Notif; onRead: () => void; onDelete: () => void
+}) {
+  const meta = TYPE_META[notif.type] ?? DEFAULT_META
+  return (
+    <TouchableOpacity
+      style={[s.card, !notif.lu && s.cardUnread]}
+      onPress={onRead}
+      activeOpacity={0.8}
+    >
+      {/* Unread indicator */}
+      {!notif.lu && <View style={s.unreadBar} />}
+
+      <View style={[s.iconBox, { backgroundColor: meta.bg }]}>
+        <Ionicons name={meta.icon as any} size={18} color={meta.color} />
+      </View>
+
+      <View style={s.textBlock}>
+        <View style={s.titleRow}>
+          <Text style={[s.notifTitle, !notif.lu && { color: COLORS.text }]} numberOfLines={1}>
+            {notif.titre}
+          </Text>
+          <Text style={s.timeText}>{timeAgo(notif.created_at)}</Text>
+        </View>
+        <Text style={s.notifMsg} numberOfLines={2}>{notif.message}</Text>
+      </View>
+
+      <TouchableOpacity
+        style={s.deleteBtn}
+        onPress={onDelete}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <Ionicons name="trash-outline" size={15} color={COLORS.text3} />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  )
 }
 
 export default function NotificationsScreen() {
@@ -28,13 +70,13 @@ export default function NotificationsScreen() {
   useEffect(() => {
     fetchNotifs()
     if (!session?.user?.id) return
-    const channel = supabase.channel('notifs-screen')
+    const ch = supabase.channel('notifs-screen')
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'notifications',
-        filter: `user_id=eq.${session.user.id}`
-      }, (payload) => setNotifs(prev => [payload.new as Notif, ...prev]))
+        filter: `user_id=eq.${session.user.id}`,
+      }, payload => setNotifs(prev => [payload.new as Notif, ...prev]))
       .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    return () => { supabase.removeChannel(ch) }
   }, [session?.user?.id])
 
   async function fetchNotifs() {
@@ -46,28 +88,29 @@ export default function NotificationsScreen() {
     if (data) setNotifs(data)
   }
 
+  async function marquerLu(id: string) {
+    await supabase.from('notifications').update({ lu: true }).eq('id', id)
+    setNotifs(prev => prev.map(n => n.id === id ? { ...n, lu: true } : n))
+  }
+
   async function marquerTousLus() {
     if (!session) return
     await supabase.from('notifications').update({ lu: true }).eq('user_id', session.user.id)
     setNotifs(prev => prev.map(n => ({ ...n, lu: true })))
   }
 
-  async function marquerLu(id: string) {
-    await supabase.from('notifications').update({ lu: true }).eq('id', id)
-    setNotifs(prev => prev.map(n => n.id === id ? { ...n, lu: true } : n))
-  }
-
-  async function supprimerNotif(id: string) {
-    await supabase.from('notifications').delete().eq('id', id)
+  async function supprimer(id: string) {
     setNotifs(prev => prev.filter(n => n.id !== id))
+    await supabase.from('notifications').delete().eq('id', id)
   }
 
   const nonLues = notifs.filter(n => !n.lu).length
 
   return (
-    <ScrollView style={[s.container, { paddingTop: insets.top }]} showsVerticalScrollIndicator={false}>
+    <View style={[s.container, { paddingTop: insets.top }]}>
+      {/* Header */}
       <View style={s.header}>
-        <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={s.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={20} color={COLORS.text} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
@@ -75,67 +118,63 @@ export default function NotificationsScreen() {
           {nonLues > 0 && <Text style={s.pageSub}>{nonLues} non lue{nonLues > 1 ? 's' : ''}</Text>}
         </View>
         {nonLues > 0 && (
-          <TouchableOpacity style={s.markAllBtn} onPress={marquerTousLus}>
+          <TouchableOpacity style={s.markAllBtn} onPress={marquerTousLus} activeOpacity={0.8}>
+            <Ionicons name="checkmark-done-outline" size={16} color={COLORS.blueLight} />
             <Text style={s.markAllText}>Tout lire</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {notifs.length === 0 ? (
-        <View style={s.emptyBox}>
-          <Ionicons name="notifications-off-outline" size={48} color={COLORS.text3} />
-          <Text style={s.emptyTitle}>Aucune notification</Text>
-          <Text style={s.emptySub}>Vous serez notifié ici de toute activité</Text>
-        </View>
-      ) : (
-        notifs.map(notif => {
-          const st = TYPE_STYLE[notif.type] ?? TYPE_STYLE['info']
-          return (
-            <TouchableOpacity
-              key={notif.id}
-              style={[s.notifCard, !notif.lu && s.notifCardUnread]}
-              onPress={() => marquerLu(notif.id)}
-              activeOpacity={0.8}
-              onLongPress={() => supprimerNotif(notif.id)}
-            >
-              <View style={[s.notifIcon, { backgroundColor: st.bg }]}>
-                <Ionicons name={st.icon as any} size={20} color={st.color} />
-              </View>
-              <View style={s.notifBody}>
-                <View style={s.notifTop}>
-                  <Text style={s.notifTitre}>{notif.titre}</Text>
-                  {!notif.lu && <View style={s.unreadDot} />}
-                </View>
-                <Text style={s.notifMessage}>{notif.message}</Text>
-                <Text style={s.notifTime}>{timeAgo(notif.created_at)}</Text>
-              </View>
-            </TouchableOpacity>
-          )
-        })
-      )}
-      <View style={{ height: 80 }} />
-    </ScrollView>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+        {notifs.length === 0 ? (
+          <View style={s.emptyBox}>
+            <View style={s.emptyIconWrap}>
+              <Ionicons name="notifications-off-outline" size={30} color={COLORS.text3} />
+            </View>
+            <Text style={s.emptyTitle}>Aucune notification</Text>
+            <Text style={s.emptySub}>Vous serez notifié ici pour vos réservations</Text>
+          </View>
+        ) : (
+          <View style={s.list}>
+            {notifs.map(n => (
+              <NotifCard
+                key={n.id}
+                notif={n}
+                onRead={() => marquerLu(n.id)}
+                onDelete={() => supprimer(n.id)}
+              />
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </View>
   )
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.navy },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
-  backBtn: { width: 36, height: 36, backgroundColor: COLORS.card, borderRadius: 18, justifyContent: 'center', alignItems: 'center', borderWidth: 0.5, borderColor: COLORS.border3 },
-  pageTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text },
-  pageSub: { fontSize: 13, color: COLORS.text2, marginTop: 2 },
-  markAllBtn: { backgroundColor: 'rgba(37,99,235,0.15)', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 0.5, borderColor: 'rgba(37,99,235,0.3)' },
-  markAllText: { fontSize: 12, color: COLORS.blueLight, fontWeight: '600' },
-  notifCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginHorizontal: 20, marginBottom: 10, backgroundColor: COLORS.card, borderRadius: 14, padding: 14, borderWidth: 0.5, borderColor: COLORS.border3 },
-  notifCardUnread: { borderColor: 'rgba(37,99,235,0.3)', backgroundColor: 'rgba(37,99,235,0.05)' },
-  notifIcon: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
-  notifBody: { flex: 1 },
-  notifTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  notifTitre: { fontSize: 14, fontWeight: '700', color: COLORS.text, flex: 1 },
-  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.blue, marginLeft: 6 },
-  notifMessage: { fontSize: 13, color: COLORS.text2, lineHeight: 18, marginBottom: 6 },
-  notifTime: { fontSize: 11, color: COLORS.text3 },
-  emptyBox: { alignItems: 'center', paddingTop: 80 },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginTop: 12, marginBottom: 6 },
-  emptySub: { fontSize: 13, color: COLORS.text2, textAlign: 'center' },
+  container:    { flex: 1, backgroundColor: COLORS.navyLight },
+  header:       { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 16 },
+  backBtn:      { width: 40, height: 40, backgroundColor: COLORS.card, borderRadius: 20, borderWidth: 1, borderColor: COLORS.border2, justifyContent: 'center', alignItems: 'center' },
+  pageTitle:    { fontSize: 20, fontWeight: '800', color: COLORS.text, letterSpacing: -0.3 },
+  pageSub:      { fontSize: 12, color: COLORS.text3, marginTop: 1 },
+  markAllBtn:   { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: COLORS.blueMuted, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(37,99,235,0.2)' },
+  markAllText:  { fontSize: 12, color: COLORS.blueLight, fontWeight: '600' },
+
+  list:         { paddingHorizontal: 20, gap: 8 },
+
+  card:         { flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 14, backgroundColor: COLORS.card, borderRadius: 14, borderWidth: 1, borderColor: COLORS.border2, position: 'relative', overflow: 'hidden' },
+  cardUnread:   { backgroundColor: COLORS.card2, borderColor: COLORS.border3 },
+  unreadBar:    { position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: COLORS.blue, borderRadius: 2 },
+  iconBox:      { width: 38, height: 38, borderRadius: 12, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  textBlock:    { flex: 1 },
+  titleRow:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 3 },
+  notifTitle:   { fontSize: 13, fontWeight: '600', color: COLORS.text2, flex: 1 },
+  timeText:     { fontSize: 10, color: COLORS.text3, flexShrink: 0 },
+  notifMsg:     { fontSize: 12, color: COLORS.text3, lineHeight: 17 },
+  deleteBtn:    { padding: 4, flexShrink: 0 },
+
+  emptyBox:     { alignItems: 'center', paddingTop: 80, paddingHorizontal: 40 },
+  emptyIconWrap:{ width: 72, height: 72, backgroundColor: COLORS.card, borderRadius: 24, borderWidth: 1, borderColor: COLORS.border2, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  emptyTitle:   { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 6 },
+  emptySub:     { fontSize: 13, color: COLORS.text2, textAlign: 'center', lineHeight: 20 },
 })

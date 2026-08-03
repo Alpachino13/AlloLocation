@@ -1,33 +1,22 @@
 import { Tabs, useRouter } from 'expo-router'
 import { useEffect } from 'react'
-import { ActivityIndicator, View } from 'react-native'
+import { ActivityIndicator, Platform, View } from 'react-native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { AuthProvider, useAuth } from '../lib/AuthContext'
 import { COLORS } from '../constants'
 
-// Icon size token — consistent across every tab
-const TAB_ICON_SIZE = 24
+const TAB_ICON_SIZE = 22
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name']
 
 function TabIcon({
-  name,
-  nameActive,
-  color,
-  focused,
+  name, nameActive, color, focused,
 }: {
-  name: IoniconsName
-  nameActive: IoniconsName
-  color: string
-  focused: boolean
+  name: IoniconsName; nameActive: IoniconsName; color: string; focused: boolean
 }) {
   return (
-    <Ionicons
-      name={focused ? nameActive : name}
-      size={TAB_ICON_SIZE}
-      color={color}
-    />
+    <Ionicons name={focused ? nameActive : name} size={TAB_ICON_SIZE} color={color} />
   )
 }
 
@@ -36,21 +25,12 @@ function Navigation() {
   const router = useRouter()
 
   useEffect(() => {
-    if (!loading && !session) {
-      router.replace('/login')
-    }
+    if (!loading && !session) router.replace('/login')
   }, [session, loading, router])
 
   if (loading) {
     return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: COLORS.navy,
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}
-      >
+      <View style={{ flex: 1, backgroundColor: COLORS.navy, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color={COLORS.blue} />
       </View>
     )
@@ -63,100 +43,69 @@ function Navigation() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: 'rgba(19,31,53,0.97)',
-          borderTopWidth: 0.5,
-          borderTopColor: COLORS.border3,
-          paddingBottom: 24,
-          paddingTop: 12,
-          height: 80,
+          backgroundColor: '#0A1525',
+          borderTopWidth: 1,
+          borderTopColor: COLORS.border2,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 10,
+          paddingTop: 10,
+          height: Platform.OS === 'ios' ? 84 : 64,
+          elevation: 0,
         },
-        tabBarActiveTintColor: COLORS.blue,
+        tabBarActiveTintColor: COLORS.blueLight,
         tabBarInactiveTintColor: COLORS.text3,
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 10,
           fontWeight: '600',
+          letterSpacing: 0.2,
+          marginTop: 2,
         },
       }}
     >
-      {/* Explorer — visible to everyone */}
       <Tabs.Screen
         name="index"
         options={{
           title: 'Explorer',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon
-              name="compass-outline"
-              nameActive="compass"
-              color={color}
-              focused={focused}
-            />
+            <TabIcon name="compass-outline" nameActive="compass" color={color} focused={focused} />
           ),
         }}
       />
-
-      {/* Dashboard — agence / admin only */}
       <Tabs.Screen
         name="dashboard"
         options={{
           title: 'Dashboard',
           href: isAgence ? '/dashboard' : null,
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon
-              name="bar-chart-outline"
-              nameActive="bar-chart"
-              color={color}
-              focused={focused}
-            />
+            <TabIcon name="bar-chart-outline" nameActive="bar-chart" color={color} focused={focused} />
           ),
         }}
       />
-
-      {/* Favoris — client only */}
       <Tabs.Screen
         name="favoris"
         options={{
           title: 'Favoris',
           href: !isAgence ? '/favoris' : null,
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon
-              name="heart-outline"
-              nameActive="heart"
-              color={color}
-              focused={focused}
-            />
+            <TabIcon name="heart-outline" nameActive="heart" color={color} focused={focused} />
           ),
         }}
       />
-
-      {/* Réservations — client only */}
       <Tabs.Screen
         name="reservations"
         options={{
           title: 'Réservations',
           href: !isAgence ? '/reservations' : null,
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon
-              name="calendar-outline"
-              nameActive="calendar"
-              color={color}
-              focused={focused}
-            />
+            <TabIcon name="calendar-outline" nameActive="calendar" color={color} focused={focused} />
           ),
         }}
       />
-
-      {/* Profil — visible to everyone */}
       <Tabs.Screen
         name="profil"
         options={{
           title: 'Profil',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon
-              name="person-outline"
-              nameActive="person"
-              color={color}
-              focused={focused}
-            />
+            <TabIcon name="person-circle-outline" nameActive="person-circle" color={color} focused={focused} />
           ),
         }}
       />
