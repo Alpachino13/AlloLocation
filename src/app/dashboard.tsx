@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import { COLORS, STATUS_COLORS, formatDA } from '../constants'
+import { envoyerNotification } from '../lib/notifications'
 
 const { width: SW } = Dimensions.get('window')
 const DAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
@@ -198,11 +199,12 @@ export default function Dashboard() {
       await supabase.from('voitures').update({ statut: statut === 'confirmee' ? 'loue' : 'disponible' }).eq('id', res.voiture_id)
     }
     if ((statut === 'confirmee' || statut === 'annulee') && res?.user_id) {
-      await supabase.from('notifications').insert({
-        user_id: res.user_id,   // ← le CLIENT qui a fait la réservation
-        titre: statut === 'confirmee' ? 'Réservation confirmée ✅' : 'Réservation refusée',
+      // Push notification native + in-app notification
+      await envoyerNotification({
+        targetUserId: res.user_id,
+        titre: statut === 'confirmee' ? '✅ Réservation confirmée !' : '❌ Réservation refusée',
         message: statut === 'confirmee'
-          ? `Votre réservation pour ${res.voitures?.nom ?? '—'} a été confirmée par l'agence. Bonne route !`
+          ? `Votre réservation pour ${res.voitures?.nom ?? '—'} a été confirmée. Bonne route !`
           : `Votre réservation pour ${res.voitures?.nom ?? '—'} a été refusée par l'agence.`,
         type: statut === 'confirmee' ? 'confirmation' : 'annulation',
       })
