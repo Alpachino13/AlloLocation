@@ -14,7 +14,7 @@ const { width: SW } = Dimensions.get('window')
 const DAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
 
 type Reservation = {
-  id: string; voiture_id: string; statut: string
+  id: string; voiture_id: string; user_id: string; statut: string
   date_debut: string; date_fin: string; montant: number; created_at: string
   voitures: { nom: string; agence_id?: string; image_url?: string | null } | null
   profils?: { nom?: string; telephone?: string } | null
@@ -175,7 +175,7 @@ export default function Dashboard() {
     if (!session) return
     const { data } = await supabase
       .from('reservations')
-      .select('id,voiture_id,statut,date_debut,date_fin,montant,created_at,voitures!inner(nom,agence_id,image_url),profils!user_id(nom,telephone)')
+      .select('id,voiture_id,user_id,statut,date_debut,date_fin,montant,created_at,voitures!inner(nom,agence_id,image_url),profils!user_id(nom,telephone)')
       .eq('voitures.agence_id', session.user.id)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -197,11 +197,13 @@ export default function Dashboard() {
     if (res?.voiture_id) {
       await supabase.from('voitures').update({ statut: statut === 'confirmee' ? 'loue' : 'disponible' }).eq('id', res.voiture_id)
     }
-    if (statut === 'confirmee' || statut === 'annulee') {
+    if ((statut === 'confirmee' || statut === 'annulee') && res?.user_id) {
       await supabase.from('notifications').insert({
-        user_id: session!.user.id,
-        titre: statut === 'confirmee' ? 'Réservation confirmée' : 'Réservation refusée',
-        message: `Votre réservation pour ${res?.voitures?.nom ?? '—'} a été ${statut === 'confirmee' ? 'confirmée' : 'refusée'}.`,
+        user_id: res.user_id,   // ← le CLIENT qui a fait la réservation
+        titre: statut === 'confirmee' ? 'Réservation confirmée ✅' : 'Réservation refusée',
+        message: statut === 'confirmee'
+          ? `Votre réservation pour ${res.voitures?.nom ?? '—'} a été confirmée par l'agence. Bonne route !`
+          : `Votre réservation pour ${res.voitures?.nom ?? '—'} a été refusée par l'agence.`,
         type: statut === 'confirmee' ? 'confirmation' : 'annulation',
       })
     }
