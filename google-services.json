@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "135643830299",
+    "project_id": "allolocation-d8048",
+    "storage_bucket": "allolocation-d8048.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:135643830299:android:dbb296751b8986c6a100be",
+        "android_client_info": {
+          "package_name": "com.mehdi_app13.AlloLocation"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB8rCKmxnjsIkqLB4rz1Oj3dWYPpU0HzgU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
