@@ -18,7 +18,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.mehdi_app13.AlloLocation"
+      "package": "com.mehdi_app13.AlloLocation",
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
@@ -43,8 +44,7 @@
         {
           "icon": "./assets/images/android-icon-monochrome.png",
           "color": "#2563EB",
-          "sounds": [],
-          "mode": "production"
+          "sounds": []
         }
       ]
     ],
