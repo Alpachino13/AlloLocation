@@ -36,18 +36,11 @@ export async function enregistrerPushToken(userId: string): Promise<string | nul
     }
 
     if (finalStatus !== 'granted') {
-      console.log('[Push] Permission refusée')
+      console.warn('[Push] Permission refusée par l\'utilisateur')
       return null
     }
 
-    // Récupérer le token Expo Push
-    const tokenData = await ExpoNotifications.getExpoPushTokenAsync({
-      projectId: '6c340de6-d45d-4518-9d82-5105ee73dcd5',
-    })
-    const token = tokenData.data
-    console.log('[Push] Token:', token)
-
-    // Configurer le channel Android
+    // Configurer le channel Android AVANT getExpoPushTokenAsync
     if (Platform.OS === 'android') {
       await ExpoNotifications.setNotificationChannelAsync('reservations', {
         name: 'Réservations',
@@ -58,15 +51,29 @@ export async function enregistrerPushToken(userId: string): Promise<string | nul
       })
     }
 
+    // Récupérer le token Expo Push
+    console.log('[Push] Récupération du token...')
+    const tokenData = await ExpoNotifications.getExpoPushTokenAsync({
+      projectId: '6c340de6-d45d-4518-9d82-5105ee73dcd5',
+    })
+    const token = tokenData.data
+    console.log('[Push] Token obtenu:', token)
+
     // Sauvegarder dans Supabase
-    await supabase
+    const { error } = await supabase
       .from('profils')
       .update({ push_token: token })
       .eq('id', userId)
 
+    if (error) {
+      console.error('[Push] Erreur Supabase UPDATE:', JSON.stringify(error))
+      return null
+    }
+
+    console.log('[Push] Token sauvegardé avec succès ✓')
     return token
-  } catch (err) {
-    console.error('[Push] Erreur enregistrement token:', err)
+  } catch (err: any) {
+    console.error('[Push] Erreur enregistrement token:', err?.message ?? err)
     return null
   }
 }
@@ -74,7 +81,7 @@ export async function enregistrerPushToken(userId: string): Promise<string | nul
 /**
  * Envoie une notification push via l'API Expo Push Service.
  * + Insère dans la table `notifications` (in-app).
- * 
+ *
  * @param targetUserId  - L'user_id Supabase du destinataire
  * @param titre         - Titre de la notif
  * @param message       - Corps de la notif
