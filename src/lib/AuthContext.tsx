@@ -66,8 +66,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   async function registerPush(userId: string) {
     if (pushRegistered.current) return
-    pushRegistered.current = true
-    await enregistrerPushToken(userId)
+    pushRegistered.current = true  // optimiste pour éviter les appels multiples
+
+    const token = await enregistrerPushToken(userId)
+
+    if (!token) {
+      // Échec → reset pour permettre un retry plus tard
+      pushRegistered.current = false
+    }
   }
 
   async function fetchRole(userId: string, retry = 0): Promise<void> {
