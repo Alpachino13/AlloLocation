@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator, Alert, Dimensions, Image, Linking, Platform,
-  ScrollView, Share, StyleSheet, Text, TouchableOpacity, View
+  ScrollView, StyleSheet, Text, TouchableOpacity, View, Share
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+import DateTimePicker from '@react-native-community/datetimepicker'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthContext'
 import { COLORS, formatDA } from '../../constants'
@@ -13,7 +14,7 @@ import { openMapsDirections, formatCoords } from '../../lib/location'
 
 const { width: SW } = Dimensions.get('window')
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 type Voiture = {
   id: string; nom: string; agence: string; agence_id: string
   prix: number; note: number; carburant: string
@@ -21,46 +22,27 @@ type Voiture = {
   wilaya: string; statut: string; categorie: string
   image_url: string | null; description: string | null
   annee: number | null; climatisation: boolean | null
-  telephone?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
+  telephone?: string | null
+  latitude?: number | null
+  longitude?: number | null
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 function formatDate(d: Date) {
   return d.toISOString().split('T')[0]
 }
 
-function addDays(d: Date, n: number) {
-  return new Date(d.getTime() + n * 86400000)
-}
-
 function displayDate(iso: string) {
-  const d = new Date(iso)
-  return d.toLocaleDateString('fr-DZ', { day: '2-digit', month: 'short' })
+  const d = new Date(iso + 'T00:00:00')
+  return d.toLocaleDateString('fr-DZ', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
-// ─── Sélecteur de durée ────────────────────────────────────────────────
-function DureeSelector({ duree, onChange }: { duree: number; onChange: (n: number) => void }) {
-  const options = [1, 2, 3, 5, 7, 14, 30]
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-      {options.map(n => (
-        <TouchableOpacity
-          key={n}
-          style={[ds.dureeChip, duree === n && ds.dureeChipActive]}
-          onPress={() => onChange(n)}
-        >
-          <Text style={[ds.dureeChipText, duree === n && ds.dureeChipTextActive]}>
-            {n}j
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
-  )
+function diffDays(a: string, b: string) {
+  const diff = new Date(b).getTime() - new Date(a).getTime()
+  return Math.max(1, Math.round(diff / 86400000))
 }
 
-// ─── Spec chip ────────────────────────────────────────────────────────────────
+// ─── Spec chip ───────────────────────────────────────────────────────────────
 function SpecChip({ icon, label }: { icon: string; label: string }) {
   return (
     <View style={ds.specChip}>
@@ -70,7 +52,7 @@ function SpecChip({ icon, label }: { icon: string; label: string }) {
   )
 }
 
-// ─── Écran principal ──────────────────────────────────────────────────────────
+// ─── Écran principal ─────────────────────────────────────────────────────────
 export default function VoitureDetail() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
@@ -83,11 +65,18 @@ export default function VoitureDetail() {
   const [favLoading, setFavLoading] = useState(false)
   const [imageError, setImageError] = useState(false)
 
+  // ── Date state ──
   const today = new Date()
-  const [dateDebut] = useState(formatDate(today))
-  const [duree, setDuree] = useState(3)
-  const dateFin = formatDate(addDays(today, duree))
-  const total = (voiture?.prix ?? 0) * duree
+  today.setHours(0, 0, 0, 0)
+  const tomorrow = new Date(today.getTime() + 86400000)
+
+  const [dateDebut, setDateDebut] = useState(today)
+  const [dateFin, setDateFin] = useState(tomorrow)
+  const [showPickerDebut, setShowPickerDebut] = useState(false)
+  const [showPickerFin, setShowPickerFin] = useState(false)
+
+  const nbJours = diffDays(formatDate(dateDebut), formatDate(dateFin))
+  const total = (voiture?.prix ?? 0) * nbJours
 
   useEffect(() => {
     if (id) {
@@ -110,12 +99,10 @@ export default function VoitureDetail() {
       return
     }
 
-    // Récupérer le téléphone de l'agence
     if (data.agence_id) {
-      const { data: profil } = await supabase.from('profils').select('telephone').eq('id', data.agence_id).single()
-      if (profil?.telephone) {
-        data.telephone = profil.telephone
-      }
+      const { data: profil } = await supabase
+        .from('profils').select('telephone').eq('id', data.agence_id).single()
+      if (profil?.telephone) data.telephone = profil.telephone
     }
 
     setVoiture(data)
@@ -135,7 +122,8 @@ export default function VoitureDetail() {
     if (!session?.user?.id) { router.push('/login'); return }
     setFavLoading(true)
     if (isFavori) {
-      await supabase.from('favoris').delete().eq('user_id', session.user.id).eq('voiture_id', id)
+      await supabase.from('favoris').delete()
+        .eq('user_id', session.user.id).eq('voiture_id', id)
       setIsFavori(false)
     } else {
       await supabase.from('favoris').insert({ user_id: session.user.id, voiture_id: id })
@@ -174,7 +162,32 @@ export default function VoitureDetail() {
       Alert.alert('Indisponible', 'Ce véhicule est actuellement loué.')
       return
     }
-    router.push(`/reservation?id=${id}&date_debut=${dateDebut}&date_fin=${dateFin}`)
+    router.push(
+      `/reservation?id=${id}&date_debut=${formatDate(dateDebut)}&date_fin=${formatDate(dateFin)}`
+    )
+  }
+
+  // ── Date picker handlers ──
+  function onChangeDebut(_: any, selected?: Date) {
+    setShowPickerDebut(false)
+    if (!selected) return
+    selected.setHours(0, 0, 0, 0)
+    setDateDebut(selected)
+    // Si dateFin <= nouvelle dateDebut, avancer dateFin
+    if (dateFin <= selected) {
+      setDateFin(new Date(selected.getTime() + 86400000))
+    }
+  }
+
+  function onChangeFin(_: any, selected?: Date) {
+    setShowPickerFin(false)
+    if (!selected) return
+    selected.setHours(0, 0, 0, 0)
+    if (selected <= dateDebut) {
+      Alert.alert('Date invalide', 'La date de retour doit être après la date de départ.')
+      return
+    }
+    setDateFin(selected)
   }
 
   if (loading) {
@@ -191,10 +204,16 @@ export default function VoitureDetail() {
   return (
     <View style={ds.container}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
-        {/* ── Image hero ────────────────────────────────────────────────────── */}
+
+        {/* ── Image hero ──────────────────────────────────────────────────── */}
         <View style={ds.heroBox}>
           {voiture.image_url && !imageError ? (
-            <Image source={{ uri: voiture.image_url }} style={ds.heroImg} resizeMode="cover" onError={() => setImageError(true)} />
+            <Image
+              source={{ uri: voiture.image_url }}
+              style={ds.heroImg}
+              resizeMode="cover"
+              onError={() => setImageError(true)}
+            />
           ) : (
             <View style={ds.heroPlaceholder}>
               <Ionicons name="car-sport" size={80} color={COLORS.text3} />
@@ -205,11 +224,9 @@ export default function VoitureDetail() {
           <TouchableOpacity style={[ds.iconBtn, { left: 16, top: insets.top + 8 }]} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={20} color={COLORS.text} />
           </TouchableOpacity>
-
           <TouchableOpacity style={[ds.iconBtn, { right: 64, top: insets.top + 8 }]} onPress={handleShare}>
             <Ionicons name="share-outline" size={20} color={COLORS.text} />
           </TouchableOpacity>
-
           <TouchableOpacity style={[ds.iconBtn, { right: 16, top: insets.top + 8 }]} onPress={toggleFavori} disabled={favLoading}>
             <Ionicons name={isFavori ? 'heart' : 'heart-outline'} size={20} color={isFavori ? COLORS.red : COLORS.text} />
           </TouchableOpacity>
@@ -229,7 +246,7 @@ export default function VoitureDetail() {
           </View>
         </View>
 
-        {/* ── Infos principales ─────────────────────────────────────────────── */}
+        {/* ── Infos principales ───────────────────────────────────────────── */}
         <View style={ds.mainCard}>
           <Text style={ds.carName}>{voiture.nom}</Text>
           {!!voiture.annee && <Text style={ds.carYear}>Année {voiture.annee}</Text>}
@@ -246,7 +263,7 @@ export default function VoitureDetail() {
           </View>
         </View>
 
-        {/* ── Spécifications ────────────────────────────────────────────────── */}
+        {/* ── Spécifications ──────────────────────────────────────────────── */}
         <View style={ds.section}>
           <Text style={ds.sectionTitle}>Caractéristiques</Text>
           <View style={ds.specsGrid}>
@@ -259,7 +276,7 @@ export default function VoitureDetail() {
           </View>
         </View>
 
-        {/* ── Description ───────────────────────────────────────────────────── */}
+        {/* ── Description ─────────────────────────────────────────────────── */}
         {!!voiture.description && (
           <View style={ds.section}>
             <Text style={ds.sectionTitle}>Description</Text>
@@ -267,30 +284,69 @@ export default function VoitureDetail() {
           </View>
         )}
 
-        {/* ── Sélecteur de durée ────────────────────────────────────────────── */}
+        {/* ── Sélecteur de dates ──────────────────────────────────────────── */}
         <View style={ds.section}>
-          <Text style={ds.sectionTitle}>Durée de location</Text>
-          <DureeSelector duree={duree} onChange={setDuree} />
+          <Text style={ds.sectionTitle}>Période de location</Text>
+
           <View style={ds.datesRow}>
-            <View style={ds.dateBox}>
-              <Text style={ds.dateLabel}>Départ</Text>
-              <Text style={ds.dateValue}>{displayDate(dateDebut)}</Text>
-            </View>
+            {/* Date départ */}
+            <TouchableOpacity style={ds.dateBox} onPress={() => setShowPickerDebut(true)} activeOpacity={0.75}>
+              <View style={ds.dateIconRow}>
+                <Ionicons name="calendar-outline" size={14} color={COLORS.blue} />
+                <Text style={ds.dateLabel}>DÉPART</Text>
+              </View>
+              <Text style={ds.dateValue}>{displayDate(formatDate(dateDebut))}</Text>
+            </TouchableOpacity>
+
             <View style={ds.dateArrow}>
               <Ionicons name="arrow-forward" size={18} color={COLORS.text3} />
             </View>
-            <View style={ds.dateBox}>
-              <Text style={ds.dateLabel}>Retour</Text>
-              <Text style={ds.dateValue}>{displayDate(dateFin)}</Text>
-            </View>
+
+            {/* Date retour */}
+            <TouchableOpacity style={ds.dateBox} onPress={() => setShowPickerFin(true)} activeOpacity={0.75}>
+              <View style={ds.dateIconRow}>
+                <Ionicons name="calendar-outline" size={14} color={COLORS.gold} />
+                <Text style={ds.dateLabel}>RETOUR</Text>
+              </View>
+              <Text style={ds.dateValue}>{displayDate(formatDate(dateFin))}</Text>
+            </TouchableOpacity>
           </View>
+
+          {/* Résumé durée */}
+          <View style={ds.dureeBadge}>
+            <Ionicons name="time-outline" size={14} color={COLORS.text2} />
+            <Text style={ds.dureeBadgeText}>{nbJours} jour{nbJours > 1 ? 's' : ''} de location</Text>
+          </View>
+
           <View style={ds.totalBox}>
             <Text style={ds.totalLabel}>Total estimé</Text>
             <Text style={ds.totalValue}>{formatDA(total)}</Text>
           </View>
         </View>
 
-        {/* ── Localisation ──────────────────────────────────────────────────── */}
+        {/* ── Date Pickers natifs ─────────────────────────────────────────── */}
+        {showPickerDebut && (
+          <DateTimePicker
+            value={dateDebut}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            minimumDate={today}
+            onChange={onChangeDebut}
+            locale="fr-DZ"
+          />
+        )}
+        {showPickerFin && (
+          <DateTimePicker
+            value={dateFin}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            minimumDate={new Date(dateDebut.getTime() + 86400000)}
+            onChange={onChangeFin}
+            locale="fr-DZ"
+          />
+        )}
+
+        {/* ── Localisation ────────────────────────────────────────────────── */}
         {voiture.latitude && voiture.longitude && (
           <View style={ds.section}>
             <Text style={ds.sectionTitle}>Localisation</Text>
@@ -312,16 +368,16 @@ export default function VoitureDetail() {
           </View>
         )}
 
-        {/* ── Conditions ────────────────────────────────────────────────────── */}
+        {/* ── Conditions ──────────────────────────────────────────────────── */}
         <View style={ds.section}>
           <Text style={ds.sectionTitle}>Conditions de location</Text>
           <View style={ds.condCard}>
             {[
               { icon: '📄', text: 'Permis de conduire algérien valide' },
-              { icon: '🪪', text: `Carte nationale d'identité (CNI)` },
+              { icon: '🪪', text: "Carte nationale d'identité (CNI)" },
               { icon: '💰', text: 'Caution : 20 000 DA (remboursable)' },
               { icon: '🚗', text: 'Âge minimum : 21 ans' },
-              { icon: '⛽', text: `Véhicule à rendre avec le même niveau d'essence` },
+              { icon: '⛽', text: "Véhicule à rendre avec le même niveau d'essence" },
             ].map((c, i) => (
               <View key={i} style={[ds.condItem, i > 0 && { borderTopWidth: 1, borderTopColor: COLORS.border }]}>
                 <Text style={ds.condIcon}>{c.icon}</Text>
@@ -331,7 +387,7 @@ export default function VoitureDetail() {
           </View>
         </View>
 
-        {/* ── Contact agence ───────────────────────────────────────────────────── */}
+        {/* ── Contact agence ──────────────────────────────────────────────── */}
         {voiture.telephone && (
           <View style={ds.section}>
             <Text style={ds.sectionTitle}>Contacter l'agence</Text>
@@ -347,13 +403,17 @@ export default function VoitureDetail() {
         )}
       </ScrollView>
 
-      {/* ── Footer fixe ───────────────────────────────────────────────────────── */}
+      {/* ── Footer fixe ─────────────────────────────────────────────────────── */}
       <View style={[ds.footer, { paddingBottom: Platform.OS === 'ios' ? insets.bottom + 12 : 16 }]}>
         <View style={ds.footerLeft}>
           <Text style={ds.footerPrice}>{formatDA(voiture.prix)}</Text>
-          <Text style={ds.footerSub}>/ jour · {duree}j = {formatDA(total)}</Text>
+          <Text style={ds.footerSub}>/ jour · {nbJours}j = {formatDA(total)}</Text>
         </View>
-        <TouchableOpacity style={[ds.reserveBtn, !dispo && ds.reserveBtnDisabled]} onPress={handleReserver} activeOpacity={0.85}>
+        <TouchableOpacity
+          style={[ds.reserveBtn, !dispo && ds.reserveBtnDisabled]}
+          onPress={handleReserver}
+          activeOpacity={0.85}
+        >
           <Text style={ds.reserveBtnText}>{dispo ? 'Réserver maintenant' : 'Indisponible'}</Text>
         </TouchableOpacity>
       </View>
@@ -390,15 +450,14 @@ const ds = StyleSheet.create({
   specIcon: { fontSize: 14 },
   specLabel: { fontSize: 13, color: COLORS.text2, fontWeight: '500' },
   description: { fontSize: 14, color: COLORS.text2, lineHeight: 22 },
-  dureeChip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 10, backgroundColor: COLORS.card, borderWidth: 0.5, borderColor: COLORS.border3 },
-  dureeChipActive: { backgroundColor: COLORS.blue, borderColor: COLORS.blue },
-  dureeChipText: { fontSize: 13, fontWeight: '600', color: COLORS.text2 },
-  dureeChipTextActive: { color: '#fff' },
-  datesRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 14, borderWidth: 0.5, borderColor: COLORS.border3, padding: 16, marginTop: 16, marginBottom: 12 },
+  datesRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 14, borderWidth: 0.5, borderColor: COLORS.border3, padding: 16, marginBottom: 10 },
   dateBox: { flex: 1 },
-  dateLabel: { fontSize: 11, color: COLORS.text3, fontWeight: '500', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateIconRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
+  dateLabel: { fontSize: 10, color: COLORS.text3, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.8 },
   dateValue: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   dateArrow: { paddingHorizontal: 12 },
+  dureeBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  dureeBadgeText: { fontSize: 13, color: COLORS.text2, fontWeight: '500' },
   totalBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.card2, borderRadius: 12, padding: 14, borderWidth: 0.5, borderColor: COLORS.border3 },
   totalLabel: { fontSize: 14, color: COLORS.text2, fontWeight: '500' },
   totalValue: { fontSize: 20, fontWeight: '800', color: COLORS.gold },
