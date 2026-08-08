@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator, Alert, Dimensions, Image, RefreshControl,
   ScrollView, StyleSheet, Text, TouchableOpacity, View,
@@ -135,16 +135,26 @@ export default function Dashboard() {
     DAY_LABELS.map((lbl, i) => ({ lbl, val: 0, h: 4, today: false }))
   )
 
+  // Ids de la flotte de l'agence, pour filtrer les événements realtime
+  // (reservations.user_id est le client, pas l'agence)
+  const voitureIdsRef = useRef<Set<string>>(new Set())
+
   useEffect(() => {
-    if (session) { charger(); fetchNomAgence(); subscribeReservations() }
-    return () => { supabase.removeAllChannels() }
+    if (session) { charger(); fetchNomAgence() }
+    const ch = subscribeReservations()
+    return () => { if (ch) supabase.removeChannel(ch) }
   }, [session])
 
   function subscribeReservations() {
-    if (!session?.user?.id) return
-    supabase.channel('dash-res')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations', filter: `user_id=eq.${session.user.id}` },
-        () => { fetchReservations(); fetchVoitures() })
+    if (!session?.user?.id) return null
+    return supabase.channel('dash-res')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' },
+        (payload) => {
+          const row = (payload.new as any) ?? (payload.old as any)
+          const voitureId = row?.voiture_id
+          if (!voitureId || !voitureIdsRef.current.has(voitureId)) return
+          fetchReservations(); fetchVoitures()
+        })
       .subscribe()
   }
 
@@ -168,8 +178,12 @@ export default function Dashboard() {
 
   async function fetchVoitures() {
     if (!session) return
-    const { data } = await supabase.from('voitures').select('statut').eq('agence_id', session.user.id)
-    if (data) { setTotalVoitures(data.length); setDisponibles(data.filter(v => v.statut === 'disponible').length) }
+    const { data } = await supabase.from('voitures').select('id,statut').eq('agence_id', session.user.id)
+    if (data) {
+      setTotalVoitures(data.length)
+      setDisponibles(data.filter(v => v.statut === 'disponible').length)
+      voitureIdsRef.current = new Set(data.map(v => v.id))
+    }
   }
 
   async function fetchReservations() {

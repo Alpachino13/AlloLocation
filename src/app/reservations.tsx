@@ -9,9 +9,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import { COLORS, STATUS_COLORS, formatDA, timeAgo } from '../constants'
+import { envoyerNotification } from '../lib/notifications'
 
 type Reservation = {
-  id: string; statut: string; date_debut: string; date_fin: string
+  id: string; voiture_id: string; statut: string; date_debut: string; date_fin: string
   montant: number; created_at: string
   voitures: { nom: string; image_url: string | null; agence: string } | null
 }
@@ -99,7 +100,7 @@ export default function Reservations() {
     setLoading(true)
     const { data } = await supabase
       .from('reservations')
-      .select('id,statut,date_debut,date_fin,montant,created_at,voitures(nom,image_url,agence)')
+      .select('id,voiture_id,statut,date_debut,date_fin,montant,created_at,voitures(nom,image_url,agence)')
       .eq('user_id', session.user.id)
       .order('created_at', { ascending: false })
     if (data) setReservations(data as any)
@@ -113,8 +114,22 @@ export default function Reservations() {
       { text: 'Retour', style: 'cancel' },
       { text: 'Annuler quand même', style: 'destructive', onPress: async () => {
         const { error } = await supabase.from('reservations').update({ statut: 'annulee' }).eq('id', id)
-        if (error) Alert.alert('Erreur', error.message)
-        else fetch()
+        if (error) { Alert.alert('Erreur', error.message); return }
+        // Notifier l'agence (push + in-app)
+        const res = reservations.find(r => r.id === id)
+        if (res?.voiture_id) {
+          const { data: voiture } = await supabase
+            .from('voitures').select('agence_id, nom').eq('id', res.voiture_id).single()
+          if (voiture?.agence_id) {
+            await envoyerNotification({
+              targetUserId: voiture.agence_id,
+              titre: '❌ Réservation annulée',
+              message: `Un client a annulé sa demande pour ${voiture.nom ?? res.voitures?.nom ?? '—'}.`,
+              type: 'annulation',
+            })
+          }
+        }
+        fetch()
       }},
     ])
   }

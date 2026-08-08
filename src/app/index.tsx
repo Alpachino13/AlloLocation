@@ -216,7 +216,17 @@ export default function HomeScreen() {
   const [favoriIds, setFavoriIds] = useState<Set<string>>(new Set())
   const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  useFocusEffect(useCallback(() => { fetchVoitures() }, []))
+  const fetchNonLues = useCallback(async () => {
+    if (!session?.user?.id) return
+    const { count } = await supabase.from('notifications').select('id', { count: 'exact' })
+      .eq('user_id', session.user.id).eq('lu', false)
+    setNonLues(count ?? 0)
+  }, [session?.user?.id])
+
+  useFocusEffect(useCallback(() => {
+    fetchVoitures()
+    fetchNonLues()
+  }, [fetchNonLues]))
 
   useEffect(() => {
     if (!session?.user?.id) return
@@ -224,9 +234,7 @@ export default function HomeScreen() {
       .then(({ data }) => { if (data?.nom) setNomUtilisateur(data.nom) })
     supabase.from('favoris').select('voiture_id').eq('user_id', session.user.id)
       .then(({ data }) => { if (data) setFavoriIds(new Set(data.map((f: any) => f.voiture_id))) })
-    supabase.from('notifications').select('id', { count: 'exact' })
-      .eq('user_id', session.user.id).eq('lu', false)
-      .then(({ count }) => setNonLues(count ?? 0))
+    fetchNonLues()
 
     const ch = supabase.channel('notifs-home')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${session.user.id}` },

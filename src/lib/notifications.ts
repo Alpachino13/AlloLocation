@@ -21,6 +21,12 @@ ExpoNotifications.setNotificationHandler({
  */
 export async function enregistrerPushToken(userId: string): Promise<string | null> {
   try {
+    if (Platform.OS === 'web') {
+      // Pas de push natif sur le web (pas de VAPID / tokens Expo)
+      console.log('[Push] Web — push tokens non disponibles')
+      return null
+    }
+
     if (!Device.isDevice) {
       console.log('[Push] Simulateur — push tokens non disponibles')
       return null
