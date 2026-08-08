@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import { COLORS, formatDA } from '../constants'
-import { envoyerNotification } from '../lib/notifications'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 function formatDate(d: Date) {
@@ -113,16 +112,7 @@ export default function ReservationConfirm() {
       })
       if (error) throw error
 
-      // Notifier l'agence (push + in-app)
-      const { data: voiture } = await supabase.from('voitures').select('agence_id').eq('id', idVoiture).single()
-      if (voiture?.agence_id) {
-        await envoyerNotification({
-          targetUserId: voiture.agence_id,
-          titre: '🚗 Nouvelle demande de réservation',
-          message: `Une nouvelle demande pour ${nomVoiture} vient d'arriver. Confirmez ou refusez dans le dashboard.`,
-          type: 'reservation',
-        })
-      }
+      // L'agence est notifiée par trigger DB (notification_triggers_migration.sql)
 
       Alert.alert(
         '✅ Réservation envoyée',

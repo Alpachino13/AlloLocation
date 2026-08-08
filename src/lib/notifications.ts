@@ -84,74 +84,10 @@ export async function enregistrerPushToken(userId: string): Promise<string | nul
   }
 }
 
-/**
- * Envoie une notification push via l'API Expo Push Service.
- * + Insère dans la table `notifications` (in-app).
- *
- * @param targetUserId  - L'user_id Supabase du destinataire
- * @param titre         - Titre de la notif
- * @param message       - Corps de la notif
- * @param type          - 'confirmation' | 'annulation' | 'reservation' | 'info'
- */
-export async function envoyerNotification({
-  targetUserId,
-  titre,
-  message,
-  type = 'info',
-}: {
-  targetUserId: string
-  titre: string
-  message: string
-  type?: string
-}): Promise<void> {
-  // 1. Insérer en base (in-app notifications)
-  await supabase.from('notifications').insert({
-    user_id: targetUserId,
-    titre,
-    message,
-    type,
-    lu: false,
-  })
-
-  // 2. Récupérer le push_token du destinataire
-  const { data: profil } = await supabase
-    .from('profils')
-    .select('push_token')
-    .eq('id', targetUserId)
-    .single()
-
-  const pushToken = profil?.push_token
-  if (!pushToken || !pushToken.startsWith('ExponentPushToken')) {
-    console.log('[Push] Pas de token pour cet utilisateur — notif in-app seulement')
-    return
-  }
-
-  // 3. Envoyer via Expo Push API
-  try {
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        to: pushToken,
-        title: titre,
-        body: message,
-        sound: 'default',
-        priority: 'high',
-        channelId: 'reservations',
-        data: { type },
-      }),
-    })
-
-    const result = await response.json()
-    if (result?.data?.status === 'error') {
-      console.error('[Push] Expo error:', result.data.message)
-    } else {
-      console.log('[Push] Envoyée avec succès à', pushToken)
-    }
-  } catch (err) {
-    console.error('[Push] Erreur envoi:', err)
-  }
-}
+// NOTE : l'envoi des notifications (in-app) est désormais géré côté base de
+// données via des triggers (notification_triggers_migration.sql +
+// notification_annulation_triggers_migration.sql). L'envoi client-side
+// était bloqué par RLS (403 sur notifications, 406 sur profils.push_token).
+// L'envoi push natif (Expo Push API) passe par l'Edge Function
+// supabase/functions/send-push-notification, déclenchée par
+// notification_push_trigger_migration.sql (pg_net → Edge Function → Expo).

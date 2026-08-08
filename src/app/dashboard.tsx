@@ -9,7 +9,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthContext'
 import { COLORS, STATUS_COLORS, formatDA } from '../constants'
-import { envoyerNotification } from '../lib/notifications'
 
 const { width: SW } = Dimensions.get('window')
 const DAY_LABELS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
@@ -212,17 +211,7 @@ export default function Dashboard() {
     if (res?.voiture_id) {
       await supabase.from('voitures').update({ statut: statut === 'confirmee' ? 'loue' : 'disponible' }).eq('id', res.voiture_id)
     }
-    if ((statut === 'confirmee' || statut === 'annulee') && res?.user_id) {
-      // Push notification native + in-app notification
-      await envoyerNotification({
-        targetUserId: res.user_id,
-        titre: statut === 'confirmee' ? '✅ Réservation confirmée !' : '❌ Réservation refusée',
-        message: statut === 'confirmee'
-          ? `Votre réservation pour ${res.voitures?.nom ?? '—'} a été confirmée. Bonne route !`
-          : `Votre réservation pour ${res.voitures?.nom ?? '—'} a été refusée par l'agence.`,
-        type: statut === 'confirmee' ? 'confirmation' : 'annulation',
-      })
-    }
+    // Le client est notifié par trigger DB (notification_triggers_migration.sql)
     fetchReservations(); fetchVoitures()
   }
 

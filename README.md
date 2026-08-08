@@ -35,6 +35,29 @@ npm run reset-project
 
 This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
+## Notifications (in-app + push Expo)
+
+Les notifications in-app sont créées côté base de données par des triggers SQL (ils contournent la RLS qui bloque l'insertion d'une notification pour un autre utilisateur) :
+
+1. **`notification_triggers_migration.sql`** — notifie l'agence à chaque nouvelle réservation, et le client quand l'agence confirme/refuse.
+2. **`notification_annulation_triggers_migration.sql`** — notifie l'agence quand un client annule (et évite d'auto-notifier celui qui agit).
+3. **`notification_push_trigger_migration.sql`** — pour chaque notification in-app, déclenche l'envoi du push natif via l'Edge Function `supabase/functions/send-push-notification` (pg_net → Edge Function → Expo Push API).
+
+À exécuter dans le SQL Editor Supabase, puis pour le push natif :
+
+```bash
+# 1. Déployer l'Edge Function
+npx supabase functions deploy send-push-notification \
+  --project-ref fmfpqqmksqasyhizeqiq --no-verify-jwt
+
+# 2. Définir un secret (Dashboard → Edge Functions → Secrets) : PUSH_SECRET
+# 3. Insérer le MÊME secret dans app_config :
+#    INSERT INTO app_config (key, value) VALUES ('push_secret', '<LE_MÊME_SECRET>')
+#    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+```
+
+Sans `PUSH_SECRET`, l'appel push est ignoré : les notifications in-app fonctionnent quand même.
+
 ### Other setup steps
 
 - To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
