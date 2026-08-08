@@ -9,7 +9,11 @@ import { envoyerNotification } from '../lib/notifications'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 function formatDate(d: Date) {
-  return d.toISOString().split('T')[0]
+  // Format local date (UTC via toISOString would shift the day for UTC+ timezones)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 function displayDate(iso: string) {
